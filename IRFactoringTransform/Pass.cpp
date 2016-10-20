@@ -12,8 +12,14 @@ namespace {
 		Factoring() : ModulePass(ID) {}
 
 		bool runOnModule(Module &M) override {
-			errs() << "Hello, factor: ";
+			errs() << "Module name: ";
 			errs().write_escaped(M.getName()) << '\n';
+            for (Function& F : M.functions())
+            {
+                StringRef ref = F.isDeclaration() ? "Function Declaration: " : "Function: ";
+                errs() << ref;
+                errs().write_escaped(F.getName()) << '\n';
+            }
 			return false;
 		}
 	};
