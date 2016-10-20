@@ -64,3 +64,6 @@ ipch/
 *.vsp
 *.vspx
 *.sap
+
+*.bat
+*.sh
