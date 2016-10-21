@@ -7,22 +7,43 @@
 using namespace llvm;
 
 namespace {
-	struct Factoring : public ModulePass {
-		static char ID;
-		Factoring() : ModulePass(ID) {}
+  void printFunctionBlocks(const Function& function)
+  {
+    if (function.isDeclaration())
+      return;
+    errs() << "Function: ";
+    errs().write_escaped(function.getName());
+    errs() << '\n';
+    int i = 0;
+    for (auto & BB: function.getBasicBlockList())
+    {
+      errs() << "Block " << i++ << "\n";
+      BB.print(errs());
+      errs() << '\n';
+    }
+  }
 
-		bool runOnModule(Module &M) override {
-			errs() << "Module name: ";
-			errs().write_escaped(M.getName()) << '\n';
-            for (Function& F : M.functions())
-            {
-                StringRef ref = F.isDeclaration() ? "Function Declaration: " : "Function: ";
-                errs() << ref;
-                errs().write_escaped(F.getName()) << '\n';
-            }
-			return false;
-		}
-	};
+
+  struct Factoring : public ModulePass {
+    static char ID;
+
+    Factoring() : ModulePass(ID) {}
+
+    bool runOnModule(Module &M) override {
+      errs() << "Module name: ";
+      errs().write_escaped(M.getName()) << '\n';
+      for (Function &F : M.functions()) {
+        printFunctionBlocks(F);
+      }
+      return false;
+    }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+      //AU.setPreservesCFG();
+      //AU.addRequired<LoopInfoWrapperPass>();
+      // preserve nothing
+    }
+  };
 }
 
 char Factoring::ID = 0;
