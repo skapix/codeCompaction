@@ -5,12 +5,16 @@
 #include "llvm/IR/Module.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Debug.h"
 
+#include <forward_list>
+
+#define DEBUG_TYPE "factor"
+
+// TODO: tests tests tests
 // TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
 // TODO: high-level optimize: use identicalBB as ref
 
-
-// TODO: don't take into account the last instruction, which is either br or ret
 // TODO: next step: compare equality of base blocks. Instruction args should be mapped.
 
 
@@ -19,6 +23,7 @@ using namespace llvm;
 namespace {
   const unsigned g_svBB = 10;
 
+  // TODO: set different upcodes for 15 most frequently used instructions and rest 1 for all the others.
   inline uint64_t instructionTo4BitCode(const Instruction& instruction)
   {
     return instruction.getOpcode() % 0xF;
@@ -59,9 +64,10 @@ namespace {
   }
 
   void CommonPatterns::appendFunction(const Function &F) {
-    for (auto& BB : F.getBasicBlockList())
+    assert(!F.isDeclaration());
+    for (auto it = F.begin(), endIt = std::prev(F.end()); it != endIt; ++it)
     {
-      appendBlock(&BB);
+      appendBlock(&*it);
     }
   }
 
@@ -111,14 +117,86 @@ namespace {
     }
   }
 
+  bool equivalentInstructions(const Instruction& i1, const Instruction& i2, DenseMap<Value*, Value*>& b2ValuesToB1)
+  {
+    if (i1.getOpcode() != i2.getOpcode() ||
+        i1.getNumOperands() != i2.getNumOperands())
+    {
+      return false;
+    }
+    // compare operands
+    return std::equal(i1.op_begin(), i1.op_end(), i2.op_begin(), [&b2ValuesToB1](const Use& u1, const Use& u2)
+    {
+      if  (u1.get()->getType() != u2.get()->getType())
+      {
+        return false;
+      }
+      if (auto C1 = dyn_cast<const Constant>(u1))
+      {
+        if (auto C2 = dyn_cast<const Constant>(u2))
+        {
+          return C1 == C2;
+        }
+        return false;
+      }
+
+      if (b2ValuesToB1.count(u1.get()) == 0)
+      {
+        b2ValuesToB1.insert(std::make_pair(u2.get(), u1.get()));
+        return true;
+      }
+      return b2ValuesToB1[u2.get()] == u1.get();
+    });
+
+  }
+
+  // block sizes should be equal
+  bool areBlocksEqual(const BasicBlock& b1, const BasicBlock& b2)
+  {
+    DenseMap<Value*, Value*> b2ValuesTobB1;
+    auto it1 = b1.begin(), it2 = b2.begin(), eit1 = std::prev(b1.end()), eit2 = std::prev(b2.end());
+
+    for (; it1 != eit1 && it2 != eit2; ++it1, ++it2)
+    {
+      if (!equivalentInstructions(*it1, *it2, b2ValuesTobB1))
+        return false;
+    }
+
+    return it1 == eit1 && it2 == eit2;
+  }
+
+  std::forward_list<SmallVector<const BasicBlock*, g_svBB>> getEqualVectorOfBlocks(const SmallVectorImpl<const BasicBlock*> &almostEqual)
+  {
+    std::forward_list<SmallVector<const BasicBlock*, g_svBB>> result;
+    std::vector<bool> gotEqual(almostEqual.size(), false);
+    for (int i = 0; i < almostEqual.size()-1; ++i)
+    {
+      if (gotEqual[i])
+        continue;
+      result.push_front(SmallVector<const BasicBlock*, g_svBB>(1, almostEqual[i]));
+      for (int j = i+1; j < almostEqual.size(); ++j)
+      {
+        if (gotEqual[j])
+          continue;
+        if (areBlocksEqual(*almostEqual[i], *almostEqual[j]))
+        {
+          result.front().push_back(almostEqual[j]);
+          gotEqual[j] = true;
+        }
+      }
+    }
+    return result;
+  }
+
+
   struct Factoring : public ModulePass {
     static char ID;
 
     Factoring() : ModulePass(ID) {}
 
     bool runOnModule(Module &M) override {
-      errs() << "Module name: ";
-      errs().write_escaped(M.getName()) << '\n';
+      DEBUG(errs() << "Module name: ");
+      DEBUG(errs().write_escaped(M.getName()) << '\n');
 
       CommonPatterns identicalBBs;
 
@@ -127,12 +205,9 @@ namespace {
         if (F.isDeclaration())
           continue;
         identicalBBs.appendFunction(F);
-
-        //printFunctionBlocks(F);
       }
 
       auto commonBBs = identicalBBs.getIdenticalBB();
-      errs() << commonBBs.size() << '\n';
       for (auto it : commonBBs)
       {
         errs() << "Code: " << it.first << '\n';
@@ -140,7 +215,16 @@ namespace {
 
         if (it.second.size() == 1)
           continue;
-        printBlocks(it.second);
+        auto listOfEqualBlocks = getEqualVectorOfBlocks(it.second);
+        int i = 0;
+        for (auto itBB : listOfEqualBlocks)
+        {
+          errs() << '[' << i++ << "] Amount of equal with the same fingerpring = " << itBB.size() << '\n';
+          errs() << "# of instructions = " << itBB.front()->size() << '\n';
+        }
+
+
+        //printBlocks(it.second);
       }
 
       return false;
