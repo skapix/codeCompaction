@@ -1,4 +1,4 @@
-//===- BBFactoring.cpp - Merge identical functions ---------------------===//
+//===- BBFactoring.cpp - Merge identical basic blocks ---------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,8 +18,8 @@
 
 #include "../external/merging.h"
 
-#include <forward_list>
 #include <set>
+#include <map>
 
 #define DEBUG_TYPE "bbfactor"
 
@@ -40,6 +40,9 @@ public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
   BBNode(BasicBlock *BB)
       : BB(BB), Hash(BBComparator::basicBlockHash(*BB, false)) {}
+
+  BBNode(BasicBlock *BB, const BBComparator::BasicBlockHash Hash)
+      : BB(BB), Hash(Hash) {}
 
   BasicBlock *getBB() const { return BB; }
 
@@ -102,26 +105,19 @@ class BBFactoring : public ModulePass {
 public:
   static char ID;
 
-  BBFactoring() : ModulePass(ID), FnTree(BBNodeCmp(&GlobalNumbers)) {}
+  BBFactoring() : ModulePass(ID) {}
 
   bool runOnModule(Module &M) override;
 
-  void getAnalysisUsage(AnalysisUsage &AU) const {
-    //AU.setPreservesCFG();
-    //AU.addRequired<LoopInfoWrapperPass>();
-    // preserve nothing
-  }
-
 private:
+  bool replace(const std::vector<BasicBlock *> BBs);
 
-  bool insert(BasicBlock *NewBB);
-  //void remove(BasicBlock *F);
-  //void replaceBBInTree(const BBNode &BBN, BasicBlock *G);
 
   class BBNodeCmp {
-    GlobalNumberState* GlobalNumbers;
+    GlobalNumberState *GlobalNumbers;
   public:
-    BBNodeCmp (GlobalNumberState* GN) : GlobalNumbers(GN) {}
+    BBNodeCmp(GlobalNumberState *GN) : GlobalNumbers(GN) {}
+
     bool operator()(const BBNode &LHS, const BBNode &RHS) const {
       // Order first by hashes, then full function comparison.
       if (LHS.getHash() != RHS.getHash())
@@ -130,12 +126,6 @@ private:
       return BBCmp.compare() == -1;
     }
   };
-
-  typedef std::set<BBNode, BBNodeCmp> FnTreeType;
-
-  FnTreeType FnTree;
-
-  ValueMap<BasicBlock*, FnTreeType::iterator> BNodesInTree;
 
   GlobalNumberState GlobalNumbers;
 
@@ -163,71 +153,47 @@ bool BBFactoring::runOnModule(Module &M) {
     }
   }
 
-  std::stable_sort(
-      HashedBBs.begin(), HashedBBs.end(),
-      [](const std::pair<BBComparator::BasicBlockHash, BasicBlock *> &a,
-         const std::pair<BBComparator::BasicBlockHash, BasicBlock *> &b) {
-        return a.first < b.first;
-      });
 
-  std::vector<WeakVH> Deferred;
+  std::vector<std::vector<BasicBlock *>> IdenticalBlocksContainer;
 
-  auto S = HashedBBs.begin();
-  for (auto I = HashedBBs.begin(), IE = HashedBBs.end(); I != IE; ++I) {
-    // If the hash value matches the previous value or the next one, we must
-    // consider merging it. Otherwise it is dropped and never considered again.
-    if ((I != S && std::prev(I)->first == I->first) ||
-        (std::next(I) != IE && std::next(I)->first == I->first)) {
-      Deferred.push_back(WeakVH(I->second));
+  // avoid MSVS compiler bug
+  auto BBTree = std::map<BBNode, std::vector<BasicBlock *>::size_type,
+      BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
+
+  for (auto it = HashedBBs.begin(), itEnd = HashedBBs.end(); it != itEnd; ++it) {
+    auto Element = BBTree.insert(std::make_pair(BBNode(it->second, it->first), IdenticalBlocksContainer.size()));
+    if (Element.second) {
+      IdenticalBlocksContainer.push_back(std::vector<BasicBlock *>(1, Element.first->first.getBB()));
+    } else {
+      IdenticalBlocksContainer[Element.first->second].push_back(Element.first->first.getBB());
     }
   }
 
-
   bool Changed = false;
 
-  for (WeakVH &I : Deferred) {
-    if (!I)
-      continue;
-    BasicBlock *BB = cast<BasicBlock>(I);
-    Changed |= insert(BB);
+  for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
+    if (IdenticalBlocks.size() >= 2) {
+      Changed |= replace(IdenticalBlocks);
+    }
   }
 
   return Changed;
 
 }
 
-bool BBFactoring::insert(BasicBlock *NewBB) {
-  std::pair<FnTreeType::iterator, bool> Result =
-      FnTree.insert(BBNode(NewBB));
 
-  if (Result.second) {
-    assert(BNodesInTree.count(NewBB) == 0);
-    BNodesInTree.insert({NewBB, Result.first});
-    DEBUG(dbgs() << "Inserting as unique: " << NewBB->getName() << '\n');
+bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
+  if (BBs.front()->size() <= 4) {
+    DEBUG(dbgs() << "Block " << BBs.front()->getName() << " in function "
+                 << BBs.front()->getParent()->getName() << " is to small to bother merging\n");
     return false;
   }
 
-  // have matched basic blocks
-  // merge them
 
-  const BBNode &OldBB = *Result.first;
-
-  // Don't merge tiny basic blocks, since it can just end up making code
-  // larger.
-    if (NewBB->size() <= 3) {
-      DEBUG(dbgs() << NewBB->getName()
-                   << " is to small to bother merging\n");
-      return false;
-    }
-
-  DEBUG(dbgs() << "Matched blocks: \n");
-  DEBUG(NewBB->print(dbgs()));
-  DEBUG(dbgs() << "\n");
-  DEBUG(OldBB.getBB()->print(dbgs()));
-
-  // merging not implemented
+  // merge not implemented yet
 
   return false;
 }
+
 
 //bool Instruction::isUsedOutsideOfBlock
