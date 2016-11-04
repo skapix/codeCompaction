@@ -12,6 +12,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
+#include <llvm/IR/IRBuilder.h>
 
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
@@ -20,6 +21,7 @@
 
 #include <set>
 #include <map>
+
 
 #define DEBUG_TYPE "bbfactor"
 
@@ -181,6 +183,91 @@ bool BBFactoring::runOnModule(Module &M) {
 
 }
 
+namespace {
+
+std::vector<const Value*> getInput(const BasicBlock *BB) {
+  std::set<const Value*> values;
+  std::vector<const Value*> result;
+  for (auto &I : BB->getInstList()) {
+    values.insert(&I);
+    if (isa<TerminatorInst>(I))
+      continue;
+
+    for (auto& Ops : I.operands()) {
+      if (isa<Constant>(Ops.get()))
+        continue;
+      if (values.find(Ops.get()) == values.end())
+      {
+        result.push_back(Ops.get());
+        values.insert(Ops.get());
+      }
+    }
+  }
+  return result;
+}
+
+std::vector<const Value *> getOutput(const BasicBlock *BB) {
+  std::vector<const Value*> result;
+  for (auto &I : BB->getInstList()) {
+    if (isa<TerminatorInst>(&I)) {
+      for (auto &Ops : I.operands()) {
+        if (!isa<BasicBlock>(Ops.get())) {
+          result.push_back(Ops.get());
+        }
+      }
+      continue;
+    }
+    if (I.isUsedOutsideOfBlock(BB)) {
+      result.push_back(&I);
+    }
+  }
+  return result;
+}
+
+// TODO: set output params
+Function *createFuncFromBB(BasicBlock *BB, const std::vector<const Value*>& Input) {
+  Module *M = BB->getModule();
+  // create Function
+  std::vector<Type*> Params;
+  Params.reserve(Input.size());
+
+  std::transform(Input.cbegin(), Input.cend(), back_inserter(Params), [](const Value *V) { return V->getType(); });
+  llvm::FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(M->getContext()), Params, false);
+  llvm::Function * f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::InternalLinkage, "", M);
+  // add some attributes ?
+
+  // create auxiliary Map to params
+  DenseMap<const Value*, Value*> InputToArgs;
+  {
+    auto ArgIt = f->arg_begin();
+
+    for (auto It = Input.cbegin(); It != Input.cend(); ++It) {
+      InputToArgs.insert(std::make_pair(*It, &*ArgIt++));
+    }
+  }
+  // start filling function
+  BasicBlock *NewBB = BasicBlock::Create(M->getContext(), "Entry", f);
+  IRBuilder<> Builder(NewBB);
+  for (auto &I : BB->getInstList()) {
+    if (isa<TerminatorInst>(I)) {
+      continue;
+    }
+    Instruction *Inserted = Builder.Insert(I.clone(), "");
+    InputToArgs.insert(std::make_pair(&I, Inserted));
+    for (auto &Op : Inserted->operands()) {
+      auto it = InputToArgs.find(Op.get());
+      if (it != InputToArgs.end()) {
+        Op.set(it->second);
+      }
+    }
+  }
+  Builder.CreateRetVoid();
+  //
+  return f;
+}
+
+
+} // namespace
 
 bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   if (BBs.front()->size() <= 4) {
@@ -189,7 +276,9 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
     return false;
   }
 
+  for (auto BB : BBs) {
 
+  }
   // merge not implemented yet
 
   return false;
