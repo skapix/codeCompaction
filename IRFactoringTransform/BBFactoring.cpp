@@ -26,7 +26,7 @@
 #define DEBUG_TYPE "bbfactor"
 
 
-// TODO: Fix assert with uses
+// TODO: ADD function return value
 // TODO: tests tests tests
 // TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
 
@@ -37,7 +37,8 @@ using namespace llvm;
 namespace {
 
 class BBNode {
-  mutable AssertingVH<BasicBlock> BB;
+  //mutable AssertingVH<BasicBlock> BB;
+  mutable BasicBlock *BB;
   BBComparator::BasicBlockHash Hash;
 public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
@@ -156,19 +157,16 @@ bool BBFactoring::runOnModule(Module &M) {
     }
   }
 
-
   std::vector<std::vector<BasicBlock *>> IdenticalBlocksContainer;
 
-  // avoid MSVS compiler bug
-  auto BBTree = std::map<BBNode, std::vector<BasicBlock *>::size_type,
-      BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
+  auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   for (auto it = HashedBBs.begin(), itEnd = HashedBBs.end(); it != itEnd; ++it) {
     auto Element = BBTree.insert(std::make_pair(BBNode(it->second, it->first), IdenticalBlocksContainer.size()));
     if (Element.second) {
-      IdenticalBlocksContainer.push_back(std::vector<BasicBlock *>(1, Element.first->first.getBB()));
+      IdenticalBlocksContainer.push_back(std::vector<BasicBlock *>(1, it->second));
     } else {
-      IdenticalBlocksContainer[Element.first->second].push_back(Element.first->first.getBB());
+      IdenticalBlocksContainer[Element.first->second].push_back(it->second);
     }
   }
 
@@ -317,16 +315,6 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
 }
 
 SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
-                                                       const ArrayRef<Value *> &Stores) {
-  SmallVector<Instruction *, 8> result;
-  result.reserve(Stores.size());
-  for (auto It : Stores) {
-    result.push_back(builder.CreateAlloca(It->getType()));
-  }
-  return result;
-}
-
-SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
                                                        const Function::arg_iterator ItBegin,
                                                        const Function::arg_iterator ItEnd) {
   SmallVector<Instruction *, 8> result;
@@ -373,7 +361,8 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
 
   Instruction *TermInst = &*BB->rbegin();
   if (isa<TerminatorInst>(TermInst)) {
-    builder.Insert(TermInst->clone());
+    auto newTerm = builder.Insert(TermInst->clone());
+    TermInst->replaceAllUsesWith(newTerm);
   }
 
   BB->replaceAllUsesWith(NewBB);
@@ -444,6 +433,10 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
 
   Function *F = createFuncFromBB(BBs.front(), Inputs.front(),
                                  convertOutput(BBs.front(), functionOutput));
+
+  DEBUG(dbgs() << "Function created:");
+  DEBUG(F->print(dbgs()));
+  DEBUG(dbgs() << '\n');
 
   SmallVector<Value *, 8> Out;
   SmallVector<size_t, 8> OutPoses;
