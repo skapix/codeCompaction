@@ -109,7 +109,8 @@ class BBFactoring : public ModulePass {
 public:
   static char ID;
 
-  BBFactoring() : ModulePass(ID) {}
+  BBFactoring() : ModulePass(ID)
+  {}
 
   bool runOnModule(Module &M) override;
 
@@ -267,11 +268,13 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   std::transform(Output.begin(), Output.end(), std::back_inserter(Params),
                  [](const Value *V) { return PointerType::get(V->getType(), 0); });
   llvm::FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(M->getContext()), Params, false);
-  llvm::Function *f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::InternalLinkage, "", M);
+  llvm::Function *f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
   // add some attributes
+  // TODO: carry out DataLayout constructor into BBFactoring class
+  DataLayout Layout(BB->getModule());
   for (size_t i = Input.size() + 1; i < Params.size() + 1; ++i) {
     f->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::NonNull));
+                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,  Layout.getTypeStoreSize(Params[i]->getSequentialElementType())));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -372,6 +375,68 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   return true;
 }
 
+template <typename T>
+struct SmallVectorImplComp
+{
+  bool operator()(const SmallVectorImpl<T>& v1, const SmallVectorImpl<T>& v2) const noexcept {
+    if (v1.size() != v2.size())
+      return v1.size() < v2.size();
+    for (auto i1 = v1.begin(), i2 = v2.begin(), e1 = v1.end(); i1 != e1; ++i1, ++i2) {
+      if (*i1 != *i2) {
+        return *i1 < *i2;
+      }
+    }
+    return false;
+  }
+};
+
+using SetOfVectors = std::set<SmallVector<size_t, 8>, SmallVectorImplComp<size_t>>;
+
+/// Merges set of sorted vectors in sorted vector of unique values
+SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
+  SmallVector<size_t, 8> Result;
+  if (Outputs.size() == 0) {
+    return Result;
+  }
+  if (Outputs.size() == 1) {
+    return *Outputs.begin();
+  }
+
+  using ItCurrentEnd = std::pair<
+      SmallVectorImpl<size_t>::const_iterator,
+      const SmallVectorImpl<size_t>::const_iterator
+  >;
+  SmallVector<ItCurrentEnd, 8> Its;
+
+  std::transform(Outputs.begin(), Outputs.end(), std::back_inserter(Its),
+                 [](const SmallVectorImpl<size_t> &Impl){
+                   return std::make_pair(Impl.begin(), Impl.end());
+                 });
+
+  size_t CurMin = std::numeric_limits<size_t>::max();
+  while (true) {
+    size_t NextMin = std::numeric_limits<size_t>::max();
+    bool Done = true;
+    for (auto It : Its) {
+      if (It.first == It.second)
+        continue;
+      if (*It.first == CurMin)
+        ++It.first;
+      else if (*It.first < NextMin)
+      {
+        NextMin = *It.first;
+        Done = false;
+      }
+    } // for
+    if (Done)
+      break;
+    Result.push_back(NextMin);
+    CurMin = NextMin;
+  }
+
+  return  Result;
+}
+
 } // namespace
 
 bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
@@ -384,23 +449,16 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
 
   std::vector<SmallVector<Value*, 8>> Inputs;
   Inputs.reserve(BBs.size());
-  std::vector<SmallVector<size_t, 8>> Outputs;
+  SetOfVectors OutputsStorage;
+  std::vector<SetOfVectors::const_iterator> Outputs;
   Outputs.reserve(BBs.size());
   for (auto BB : BBs) {
     Inputs.emplace_back(getInput(BB));
-    Outputs.emplace_back(getOutput(BB));
+    auto result = OutputsStorage.insert(getOutput(BB));
+    Outputs.emplace_back(result.first);
   }
-
-  SmallVector<size_t, 8> functionOutput;
-  // TODO: optimize getting function output
-  for (auto& Output : Outputs) {
-    SmallVector<size_t, 8> Tmp;
-    std::set_union(Output.begin(), Output.end(),
-                   functionOutput.begin(), functionOutput.end(),
-                   std::back_inserter(Tmp));
-    functionOutput.clear();
-    std::copy(Tmp.begin(), Tmp.end(), std::back_inserter(functionOutput));
-  }
+  // Get function Output Values
+  SmallVector<size_t, 8> functionOutput = combineOutputs(OutputsStorage);
 
   // Input Validation
   assert(std::equal(std::next(Inputs.begin()), Inputs.end(),
@@ -441,8 +499,8 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   SmallVector<Value *, 8> Out;
   SmallVector<size_t, 8> OutPoses;
   for (size_t i = 0; i < BBs.size(); ++i) {
-    Out = convertOutput(BBs[i], Outputs[i]);
-    OutPoses = findPoses(Outputs[i], functionOutput);
+    Out = convertOutput(BBs[i], *Outputs[i]);
+    OutPoses = findPoses(*Outputs[i], functionOutput);
     replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out, OutPoses);
   }
 
