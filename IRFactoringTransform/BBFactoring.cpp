@@ -133,7 +133,7 @@ private:
   };
 
   GlobalNumberState GlobalNumbers;
-
+  std::unique_ptr<DataLayout> DataLayoutPtr;
 };
 
 } // namespace
@@ -149,6 +149,7 @@ bool BBFactoring::runOnModule(Module &M) {
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
   std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
 
+  DataLayoutPtr = make_unique<DataLayout>(&M);
 
   // calculate fingerprints for all basic blocks in every function
   for (auto &F : M.functions()) {
@@ -218,6 +219,7 @@ SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
           result.push_back(found->second);
         }
       }
+      assert(std::prev(BB->end()) == I && "Incorrect Basic Block");
       continue;
     }
     if (I->isUsedOutsideOfBlock(BB)) {
@@ -257,10 +259,10 @@ SmallVector<Value *, 8> convertOutput(BasicBlock *BB, const SmallVectorImpl<size
 
 // TODO: Add return value if 1 output argument of first class type
 Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input,
-                           const SmallVectorImpl<Value *> &Output) {
+                           const SmallVectorImpl<Value *> &Output, const DataLayout& Layout) {
   Module *M = BB->getModule();
   // create Function
-  SmallVector<Type *, 16> Params;
+  SmallVector<Type *, 8> Params;
   Params.reserve(Input.size() + Output.size());
 
   std::transform(Input.begin(), Input.end(), std::back_inserter(Params),
@@ -270,11 +272,11 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   llvm::FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(M->getContext()), Params, false);
   llvm::Function *f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
   // add some attributes
-  // TODO: carry out DataLayout constructor into BBFactoring class
-  DataLayout Layout(BB->getModule());
+  
   for (size_t i = Input.size() + 1; i < Params.size() + 1; ++i) {
     f->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,  Layout.getTypeStoreSize(Params[i]->getSequentialElementType())));
+                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,
+                      Layout.getTypeStoreSize(Params[i]->getSequentialElementType())));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -332,7 +334,9 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                const ArrayRef<Value *> &Output,
                                const ArrayRef<size_t> &OutputPoses) {
   assert(Output.size() == OutputPoses.size());
+
   // create New Basic Block
+  
   std::string newName = BB->getName();
   BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> builder(NewBB);
@@ -343,22 +347,21 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   auto OutputArgStart = F->arg_begin();
   std::advance(OutputArgStart, Input.size());
   auto outputAllocas = createAllocaInstructions(builder,
-                                                OutputArgStart, F->arg_end()/*Output*/);
+    OutputArgStart, F->arg_end()/*Output*/);
   copy(outputAllocas.begin(), outputAllocas.end(), back_inserter(arguments));
 
   builder.CreateCall(F, arguments);
 
   // remove basic block, replacing all Uses
-  {
-    // i iterates over function arguments
-    // j iterates over OutputPoses, which points to position in function arguments
-    size_t j = 0;
-    for (size_t i = 0; /*i < outputAllocas.size() && */j < OutputPoses.size(); ++i) {
-      if (i == OutputPoses[j]) {
-        auto Inst = builder.CreateLoad(outputAllocas[i]);
-        Output[j]->replaceAllUsesWith(Inst);
-        ++j;
-      }
+  // i iterates over function arguments
+  // j iterates over OutputPoses, which points to position in function arguments
+  
+  for (size_t i = 0, j = 0; j < OutputPoses.size(); ++i) {
+    assert(i < outputAllocas.size());
+    if (i == OutputPoses[j]) {
+      auto Inst = builder.CreateLoad(outputAllocas[i]);
+      Output[j]->replaceAllUsesWith(Inst);
+      ++j;
     }
   }
 
@@ -490,7 +493,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   }
 
   Function *F = createFuncFromBB(BBs.front(), Inputs.front(),
-                                 convertOutput(BBs.front(), functionOutput));
+    convertOutput(BBs.front(), functionOutput), *DataLayoutPtr);
 
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));
