@@ -27,6 +27,7 @@
 
 
 // TODO: ADD function return value
+// TODO: ? place BB comparing in this file
 // TODO: tests tests tests
 // TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
 
@@ -133,7 +134,6 @@ private:
   };
 
   GlobalNumberState GlobalNumbers;
-  std::unique_ptr<DataLayout> DataLayoutPtr;
 };
 
 } // namespace
@@ -148,8 +148,6 @@ bool BBFactoring::runOnModule(Module &M) {
   DEBUG(dbgs() << "Module name: ");
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
   std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
-
-  DataLayoutPtr = make_unique<DataLayout>(&M);
 
   // calculate fingerprints for all basic blocks in every function
   for (auto &F : M.functions()) {
@@ -206,6 +204,19 @@ SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
   return result;
 }
 
+/// isInstUsedOutsideOfBB - Return true if there are any uses of Inst outside of the
+/// specified block. The difference with Instruction::isUsedOutsideOfBlock is that
+/// this function doesn't consider Phi nodes as a special case.
+bool isInstUsedOutsideOfBB(const Instruction *InstOriginal, const BasicBlock *BB) {
+  for (const Use &U : InstOriginal->uses()) {
+    const Instruction *I = cast<Instruction>(U.getUser());
+    if (I->getParent() != BB)
+      return true;
+  }
+  return false;
+}
+
+// TODO: Place out check on IerminatorInst
 SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   SmallVector<size_t, 8> result;
   std::map<const Value *, const size_t> auxiliary;
@@ -220,9 +231,9 @@ SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
         }
       }
       assert(std::prev(BB->end()) == I && "Incorrect Basic Block");
-      continue;
+      return result;
     }
-    if (I->isUsedOutsideOfBlock(BB)) {
+    if (isInstUsedOutsideOfBB(&*I, BB)) {
       result.push_back(current);
     }
   }
@@ -259,8 +270,9 @@ SmallVector<Value *, 8> convertOutput(BasicBlock *BB, const SmallVectorImpl<size
 
 // TODO: Add return value if 1 output argument of first class type
 Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input,
-                           const SmallVectorImpl<Value *> &Output, const DataLayout& Layout) {
+                           const SmallVectorImpl<Value *> &Output) {
   Module *M = BB->getModule();
+  const DataLayout& Layout = M->getDataLayout();
   // create Function
   SmallVector<Type *, 8> Params;
   Params.reserve(Input.size() + Output.size());
@@ -271,12 +283,18 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
                  [](const Value *V) { return PointerType::get(V->getType(), 0); });
   llvm::FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(M->getContext()), Params, false);
   llvm::Function *f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
+
   // add some attributes
-  
+  f->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
+  f->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
+  f->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+
   for (size_t i = Input.size() + 1; i < Params.size() + 1; ++i) {
     f->addAttribute(static_cast<unsigned>(i),
                     llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,
-                      Layout.getTypeStoreSize(Params[i]->getSequentialElementType())));
+                      Layout.getTypeStoreSize(Params[i-1]->getSequentialElementType())));
+    f->addAttribute(static_cast<unsigned>(i),
+                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::NoAlias));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -299,7 +317,8 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   IRBuilder<> Builder(NewBB);
   for (auto &I : BB->getInstList()) {
     if (isa<TerminatorInst>(I)) {
-      continue;
+      assert(&I == &*BB->rbegin());
+      break;
     }
 
     Instruction *Inserted = Builder.Insert(I.clone(), "");
@@ -312,7 +331,7 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
     }
     auto found = OutputToArgs.find(&I);
     if (found != OutputToArgs.end()) {
-      Builder.CreateStore(Inserted, found->second); // TODO: decide what to do with volatile
+      Builder.CreateStore(Inserted, found->second);
     }
   }
   Builder.CreateRetVoid();
@@ -493,7 +512,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   }
 
   Function *F = createFuncFromBB(BBs.front(), Inputs.front(),
-    convertOutput(BBs.front(), functionOutput), *DataLayoutPtr);
+    convertOutput(BBs.front(), functionOutput));
 
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));

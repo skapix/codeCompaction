@@ -87,6 +87,7 @@ int BBComparator::cmpMem(StringRef L, StringRef R) const {
 
 int BBComparator::cmpAttrs(const AttributeSet L,
                                  const AttributeSet R) const {
+
   if (int Res = cmpNumbers(L.getNumSlots(), R.getNumSlots()))
     return Res;
 
@@ -726,11 +727,14 @@ int BBComparator::cmpValues(const Value *L, const Value *R) const {
 
   return cmpNumbers(LeftSN.first->second, RightSN.first->second);
 }
-// Test whether two basic blocks have equivalent behaviour.
+// Test whether two basic blocks have equivalent behaviour,
+// except termination instruction
 int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
                                        const BasicBlock *BBR) const {
-  BasicBlock::const_iterator InstL = BBL->begin(), InstLE = BBL->end();
-  BasicBlock::const_iterator InstR = BBR->begin(), InstRE = BBR->end();
+  BasicBlock::const_iterator InstL = BBL->begin(),
+    InstLE = isa<TerminatorInst>(*BBL->rbegin()) ? --BBL->end() : BBL->end();
+  BasicBlock::const_iterator InstR = BBR->begin(),
+    InstRE = isa<TerminatorInst>(*BBR->rbegin()) ? --BBR->end() : BBR->end();
 
   do {
     if (int Res = cmpValues(&*InstL, &*InstR))
@@ -753,16 +757,9 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
     } else {
       if (int Res = cmpOperations(&*InstL, &*InstR))
         return Res;
-      assert(InstL->getNumOperands() == InstR->getNumOperands());
 
-      for (unsigned i = 0, e = InstL->getNumOperands(); i != e; ++i) {
-        Value *OpL = InstL->getOperand(i);
-        Value *OpR = InstR->getOperand(i);
-        if (int Res = cmpValues(OpL, OpR))
-          return Res;
-        // cmpValues should ensure this is true.
-        assert(cmpTypes(OpL->getType(), OpR->getType()) == 0);
-      }
+      if (int Res = cmpInstOperands(&*InstL, &*InstR))
+        return Res;
     }
 
     ++InstL;
@@ -773,6 +770,31 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
     return 1;
   if (InstL == InstLE && InstR != InstRE)
     return -1;
+  return 0;
+}
+
+int BBComparator::cmpInstOperands(const Instruction *InstL, const Instruction *InstR) const {
+  assert(InstL->getNumOperands() == InstR->getNumOperands());
+
+  if (InstL->isCommutative()) {
+    // op(x1,y1); op(x2,y2)
+    assert(InstL->isCommutative() == InstR->isCommutative());
+    assert(InstL->getNumOperands() == 2);
+    if (!cmpValues(InstL->getOperand(0), InstR->getOperand(1)) &&
+        !cmpValues(InstL->getOperand(1), InstR->getOperand(0)))
+      return 0;
+  }
+  // If !(x1 == y2 && y1 == x2) then make usual check
+
+  for (unsigned i = 0, e = InstL->getNumOperands(); i != e; ++i) {
+    Value *OpL = InstL->getOperand(i);
+    Value *OpR = InstR->getOperand(i);
+    if (int Res = cmpValues(OpL, OpR))
+      return Res;
+    // cmpValues should ensure this is true.
+    assert(cmpTypes(OpL->getType(), OpR->getType()) == 0);
+  }
+
   return 0;
 }
 
@@ -823,11 +845,25 @@ BBComparator::BasicBlockHash BBComparator::basicBlockHash(BasicBlock &BB,
   return H.getHash();
 }
 
+//AttributeSet unnecessaryAttributes
+
 int BBComparator::compare() {
   sn_mapL.clear();
   sn_mapR.clear();
+  const AttributeSet unnecessaryAttributes = AttributeSet().
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::ReadOnly).
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::WriteOnly).
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::JumpTable).
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::Naked).
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::NoReturn).
+      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::NoRecurse).
+      addAttribute(BBL->getContext(),AttributeSet::FunctionIndex, Attribute::ReadNone);
 
-  if (int Res = cmpAttrs(BBL->getParent()->getAttributes(), BBR->getParent()->getAttributes()))
+  auto AttributesLF =  BBL->getParent()->getAttributes().removeAttributes(
+      BBL->getContext(), AttributeSet::FunctionIndex, unnecessaryAttributes);
+  auto AttributesRF =  BBR->getParent()->getAttributes().removeAttributes(
+      BBR->getContext(), AttributeSet::FunctionIndex, unnecessaryAttributes);
+  if (int Res = cmpAttrs(AttributesLF, AttributesRF))
     return Res;
 
   if (int Res = cmpNumbers(BBL->getParent()->hasGC(), BBR->getParent()->hasGC()))

@@ -67,6 +67,7 @@ private:
   /// Test whether two basic blocks have equivalent behaviour.
   int cmpBasicBlocks(const BasicBlock *BBL, const BasicBlock *BBR) const;
 
+  int cmpInstOperands(const Instruction *IL, const Instruction *IR) const;
   /// Constants comparison.
   /// Its analog to lexicographical comparison between hypothetical numbers
   /// of next format:
