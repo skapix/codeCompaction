@@ -205,51 +205,25 @@ SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
 }
 
 /// isInstUsedOutsideOfBB - Return true if there are any uses of Inst outside of the
-/// specified block. The difference with Instruction::isUsedOutsideOfBlock is that
-/// this function doesn't consider Phi nodes as a special case.
-bool isInstUsedOutsideOfBB(const Instruction *InstOriginal, const BasicBlock *BB) {
+/// specified block. This function doesn't consider Phi nodes as a special case,
+/// but deals with TerminatorInst's like instructions in other block.
+bool isValUsedOutsideOfBB(const Value *InstOriginal, const BasicBlock *BB) {
+
   for (const Use &U : InstOriginal->uses()) {
     const Instruction *I = cast<Instruction>(U.getUser());
-    if (I->getParent() != BB)
+    if (I->getParent() != BB || isa<TerminatorInst>(I))
       return true;
   }
   return false;
 }
 
-// TODO: Place out check on IerminatorInst
 SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   SmallVector<size_t, 8> result;
-  std::map<const Value *, const size_t> auxiliary;
   size_t current = 0;
-  for (auto I = BB->begin(); I != BB->end(); ++I, ++current) {
-    auxiliary.insert(std::make_pair(&*I, current));
-    if (isa<TerminatorInst>(&*I)) {
-      for (auto &Ops : I->operands()) {
-        auto found = auxiliary.find(Ops.get());
-        if (found != auxiliary.end()) {
-          result.push_back(found->second);
-        }
-      }
-      assert(std::prev(BB->end()) == I && "Incorrect Basic Block");
-      return result;
-    }
-    if (isInstUsedOutsideOfBB(&*I, BB)) {
+  auto IE = isa<TerminatorInst>(BB->back()) ? --BB->end() : BB->end();
+  for (auto I = BB->begin(); I != IE; ++I, ++current) {
+    if (isValUsedOutsideOfBB(&*I, BB)) {
       result.push_back(current);
-    }
-  }
-  return result;
-}
-
-/// Function finds Positions of 'smaller' elements in 'greater' array
-SmallVector<size_t, 8> findPoses(const ArrayRef<size_t>& smaller,
-                                 const ArrayRef<size_t>& greater) {
-  SmallVector<size_t, 8> result;
-  result.reserve(smaller.size());
-  size_t currentPos = 0;
-  for (auto SIt = smaller.begin(), GIt = greater.begin(); SIt != smaller.end(); ++GIt, ++currentPos) {
-    if (*GIt == *SIt) {
-      result.push_back(currentPos);
-      ++SIt;
     }
   }
   return result;
@@ -350,9 +324,7 @@ SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
 
 bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                const ArrayRef<Value *> &Input,
-                               const ArrayRef<Value *> &Output,
-                               const ArrayRef<size_t> &OutputPoses) {
-  assert(Output.size() == OutputPoses.size());
+                               const ArrayRef<Value *> &Output) {
 
   // create New Basic Block
   
@@ -372,16 +344,14 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   builder.CreateCall(F, arguments);
 
   // remove basic block, replacing all Uses
-  // i iterates over function arguments
-  // j iterates over OutputPoses, which points to position in function arguments
   
-  for (size_t i = 0, j = 0; j < OutputPoses.size(); ++i) {
+  for (size_t i = 0; i < Output.size(); ++i) {
     assert(i < outputAllocas.size());
-    if (i == OutputPoses[j]) {
+    if (isValUsedOutsideOfBB(Output[i], BB)) {
       auto Inst = builder.CreateLoad(outputAllocas[i]);
-      Output[j]->replaceAllUsesWith(Inst);
-      ++j;
+      Output[i]->replaceAllUsesWith(Inst);
     }
+
   }
 
   Instruction *TermInst = &*BB->rbegin();
@@ -522,8 +492,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   SmallVector<size_t, 8> OutPoses;
   for (size_t i = 0; i < BBs.size(); ++i) {
     Out = convertOutput(BBs[i], *Outputs[i]);
-    OutPoses = findPoses(*Outputs[i], functionOutput);
-    replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out, OutPoses);
+    replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out);
   }
 
   return true;
