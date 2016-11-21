@@ -26,7 +26,6 @@
 #define DEBUG_TYPE "bbfactor"
 
 
-// TODO: ADD function return value
 // TODO: ? place BB comparing in this file
 // TODO: tests tests tests
 // TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
@@ -229,22 +228,37 @@ SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   return result;
 }
 
-SmallVector<Value *, 8> convertOutput(BasicBlock *BB, const SmallVectorImpl<size_t> &numInstr) {
-  size_t current = 0;
-  auto currentNum = numInstr.begin();
-  SmallVector<Value *, 8> result;
-  for (auto I = BB->begin(); I != BB->end() && currentNum != numInstr.end(); ++I, ++current) {
-    if (*currentNum == current) {
-      result.push_back(&*I);
-      ++currentNum;
-    }
+SmallVector<Value *, 8> convertOutput(BasicBlock *BB,
+                                      const SmallVectorImpl<size_t> &numInstr) {
+  SmallVector<Value *, 8> Result;
+  Result.reserve(numInstr.size());
+  if (numInstr.empty())
+    return Result;
+  auto It = BB->begin();
+  std::advance(It, numInstr.front());
+  Result.push_back(&*It);
+  for (size_t i = 1; i < numInstr.size(); ++i) {
+    std::advance(It, numInstr[i] - numInstr[i-1]);
+    Result.push_back(&*It);
   }
-  return result;
+  return Result;
 }
 
-// TODO: Add return value if 1 output argument of first class type
+Value *convertOutput(BasicBlock *BB, const size_t numInstr) {
+  if (BB->size() <= numInstr)
+    return nullptr;
+  auto It = BB->begin();
+  std::advance(It, numInstr);
+  return &*It;
+}
+
+
+size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
+  return find_if(Outputs.rbegin(), Outputs.rend(), [](Value *V) { return V->getType()->isFirstClassType(); }) - Outputs.rbegin();
+}
+
 Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input,
-                           const SmallVectorImpl<Value *> &Output) {
+                           const SmallVectorImpl<Value *> &Output, const Value *ReturnValue) {
   Module *M = BB->getModule();
   const DataLayout& Layout = M->getDataLayout();
   // create Function
@@ -253,21 +267,27 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
 
   std::transform(Input.begin(), Input.end(), std::back_inserter(Params),
                  [](const Value *V) { return V->getType(); });
-  std::transform(Output.begin(), Output.end(), std::back_inserter(Params),
-                 [](const Value *V) { return PointerType::get(V->getType(), 0); });
-  llvm::FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(M->getContext()), Params, false);
-  llvm::Function *f = Function::Create(ft, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
+
+  Type *FunctionReturnT = ReturnValue ?
+                          ReturnValue->getType() :
+                          llvm::Type::getVoidTy(M->getContext());
+
+  transform(Output.begin(), Output.end(), std::back_inserter(Params),
+            [](const Value *V) {return PointerType::get(V->getType(), 0); });
+
+  llvm::FunctionType *FType = FunctionType::get(FunctionReturnT, Params, false);
+  llvm::Function *F = Function::Create(FType, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
   // add some attributes
-  f->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
-  f->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
-  f->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  F->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
+  F->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
+  F->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
 
   for (size_t i = Input.size() + 1; i < Params.size() + 1; ++i) {
-    f->addAttribute(static_cast<unsigned>(i),
+    F->addAttribute(static_cast<unsigned>(i),
                     llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,
                       Layout.getTypeStoreSize(Params[i-1]->getSequentialElementType())));
-    f->addAttribute(static_cast<unsigned>(i),
+    F->addAttribute(static_cast<unsigned>(i),
                     llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::NoAlias));
   }
 
@@ -276,22 +296,23 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   // create auxiliary Map from Output to function arguments
   DenseMap<const Value *, Value *> OutputToArgs;
   {
-    auto ArgIt = f->arg_begin();
+    auto ArgIt = F->arg_begin();
 
     for (auto It = Input.begin(); It != Input.end(); ++It) {
       InputToArgs.insert(std::make_pair(*It, &*ArgIt++));
     }
     for (auto It = Output.begin(); It != Output.end(); ++It) {
-      OutputToArgs.insert(std::make_pair(*It, &*ArgIt++));
+        OutputToArgs.insert(std::make_pair(*It, &*ArgIt++));
     }
-    assert(ArgIt == f->arg_end());
+    assert(ArgIt == F->arg_end());
   }
   // start filling function
-  BasicBlock *NewBB = BasicBlock::Create(M->getContext(), "Entry", f);
+  BasicBlock *NewBB = BasicBlock::Create(M->getContext(), "Entry", F);
   IRBuilder<> Builder(NewBB);
+  Value *ReturnValueF = nullptr;
   for (auto &I : BB->getInstList()) {
     if (isa<TerminatorInst>(I)) {
-      assert(&I == &*BB->rbegin());
+      assert(&I == &BB->back());
       break;
     }
 
@@ -307,9 +328,17 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
     if (found != OutputToArgs.end()) {
       Builder.CreateStore(Inserted, found->second);
     }
+    else if (&I == ReturnValue) {
+      assert(ReturnValueF == nullptr);
+      ReturnValueF = Inserted;
+    }
   }
-  Builder.CreateRetVoid();
-  return f;
+  if (ReturnValueF)
+    Builder.CreateRet(ReturnValueF);
+  else
+    Builder.CreateRetVoid();
+
+  return F;
 }
 
 SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
@@ -324,37 +353,38 @@ SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
 
 bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                const ArrayRef<Value *> &Input,
-                               const ArrayRef<Value *> &Output) {
+                               const ArrayRef<Value *> &Output,
+                               Value *Result) {
 
   // create New Basic Block
-  
+
   std::string newName = BB->getName();
   BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> builder(NewBB);
-  std::vector<Value *> arguments;
-  assert(F->arg_size() >= Input.size() + Output.size());
-  arguments.reserve(F->arg_size());
-  copy(Input.begin(), Input.end(), back_inserter(arguments));
+  SmallVector<Value *, 8> Args;
+  assert(F->arg_size() == Input.size() + Output.size());
+  Args.reserve(F->arg_size());
+  copy(Input.begin(), Input.end(), std::back_inserter(Args));
   auto OutputArgStart = F->arg_begin();
   std::advance(OutputArgStart, Input.size());
   auto outputAllocas = createAllocaInstructions(builder,
-    OutputArgStart, F->arg_end()/*Output*/);
-  copy(outputAllocas.begin(), outputAllocas.end(), back_inserter(arguments));
+    OutputArgStart, F->arg_end());
+  copy(outputAllocas.begin(), outputAllocas.end(), std::back_inserter(Args));
 
-  builder.CreateCall(F, arguments);
+  Instruction *CallFunc = builder.CreateCall(F, Args);
+  if (Result)
+    Result->replaceAllUsesWith(CallFunc);
 
   // remove basic block, replacing all Uses
   
   for (size_t i = 0; i < Output.size(); ++i) {
-    assert(i < outputAllocas.size());
     if (isValUsedOutsideOfBB(Output[i], BB)) {
       auto Inst = builder.CreateLoad(outputAllocas[i]);
       Output[i]->replaceAllUsesWith(Inst);
     }
-
   }
 
-  Instruction *TermInst = &*BB->rbegin();
+  Instruction *TermInst = &BB->back();
   if (isa<TerminatorInst>(TermInst)) {
     auto newTerm = builder.Insert(TermInst->clone());
     TermInst->replaceAllUsesWith(newTerm);
@@ -429,6 +459,7 @@ SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   return  Result;
 }
 
+
 } // namespace
 
 bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
@@ -450,7 +481,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
     Outputs.emplace_back(result.first);
   }
   // Get function Output Values
-  SmallVector<size_t, 8> functionOutput = combineOutputs(OutputsStorage);
+  SmallVector<size_t, 8> functionOutputIds = combineOutputs(OutputsStorage);
 
   // Input Validation
   assert(std::equal(std::next(Inputs.begin()), Inputs.end(),
@@ -468,21 +499,34 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
                     }
   ));
 
-  if (functionOutput.size() > 4) {
+  if (functionOutputIds.size() > 4) {
     DEBUG(dbgs() << "Block family has many output parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
     return false;
   }
-  if (functionOutput.size() + Inputs.size() > 5) {
+  if (functionOutputIds.size() + Inputs.size() > 5) {
     DEBUG(dbgs() << "Block family has many parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
     return false;
   }
 
+  // Change output values according to function's return
+  auto FunctionOutput = convertOutput(BBs.front(), functionOutputIds);
+  size_t ResultInstId = std::numeric_limits<size_t>::max();
+  Value *ReturnF = nullptr;
+  {
+    size_t ReturnIdF = getFunctionRetValId(FunctionOutput);
+    if (ReturnIdF != FunctionOutput.size()) {
+      ReturnF = FunctionOutput[ReturnIdF];
+      FunctionOutput.erase(FunctionOutput.begin() + ReturnIdF);
+      ResultInstId = functionOutputIds[ReturnIdF];
+      functionOutputIds.erase(functionOutputIds.begin() + ReturnIdF);
+    }
+  }
   Function *F = createFuncFromBB(BBs.front(), Inputs.front(),
-    convertOutput(BBs.front(), functionOutput));
+                                 FunctionOutput, ReturnF);
 
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));
@@ -491,8 +535,9 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   SmallVector<Value *, 8> Out;
   SmallVector<size_t, 8> OutPoses;
   for (size_t i = 0; i < BBs.size(); ++i) {
-    Out = convertOutput(BBs[i], *Outputs[i]);
-    replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out);
+    Out = convertOutput(BBs[i], functionOutputIds);
+    ReturnF = convertOutput(BBs[i], ResultInstId);
+    replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out, ReturnF);
   }
 
   return true;
