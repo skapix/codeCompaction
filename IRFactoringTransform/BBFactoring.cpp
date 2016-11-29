@@ -7,39 +7,28 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/IR/Function.h"
-#include "llvm/Pass.h"
-#include "llvm/IR/Module.h"
-#include <llvm/IR/IRBuilder.h>
-
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/Debug.h"
-
 #include "../external/merging.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <set>
-#include <map>
-
 
 #define DEBUG_TYPE "bbfactor"
-
 
 // TODO: ? place BB comparing in this file
 // TODO: tests tests tests
 // TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
-
-
 
 using namespace llvm;
 
 namespace {
 
 class BBNode {
-  //mutable AssertingVH<BasicBlock> BB;
   mutable BasicBlock *BB;
   BBComparator::BasicBlockHash Hash;
+
 public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
   BBNode(BasicBlock *BB)
@@ -51,75 +40,25 @@ public:
   BasicBlock *getBB() const { return BB; }
 
   BBComparator::BasicBlockHash getHash() const { return Hash; }
-
-  /// Replace the reference to the function F by the function G, assuming their
-  /// implementations are equal.
-  void replaceBy(BasicBlock *G) const {
-    BB = G;
-  }
-
-  void release() { BB = nullptr; }
 };
 
-} // namespace
-
-namespace {
-
-void printUses(const BasicBlock &block) {
-  if (!block.hasNUsesOrMore(1)) {
-    errs() << "No Uses\n";
-    return;
-  }
-  errs() << "Uses:\n";
-  int i = 0;
-  for (auto &U : block.uses()) {
-    errs() << "Use " << i++ << "\n";
-    U.getUser()->print(errs());
-    errs() << '\n';
-  }
-
-}
-
-void printFunctionBlocks(const Function &function) {
-  if (function.isDeclaration())
-    return;
-  errs() << "Function: ";
-  errs().write_escaped(function.getName());
-  errs() << '\n';
-  int i = 0;
-  for (auto &BB: function.getBasicBlockList()) {
-    printUses(BB);
-    errs() << "Block " << i++ << "\n";
-    BB.print(errs());
-    errs() << '\n';
-  }
-}
-
-void printBlocks(const SmallVectorImpl<const BasicBlock *> &BBVector) {
-  int i = 0;
-  for (auto &BB: BBVector) {
-    errs() << "Block " << i++ << "\n";
-    BB->print(errs());
-    errs() << '\n';
-  }
-}
-
-
+/// BBFactoring finds basic blocks which will generate identical machine code
+/// Once identified, BBFactoring will fold them by replacing these basic blocks
+/// with a call to a function.
 class BBFactoring : public ModulePass {
 public:
   static char ID;
 
-  BBFactoring() : ModulePass(ID)
-  {}
+  BBFactoring() : ModulePass(ID) {}
 
   bool runOnModule(Module &M) override;
 
 private:
   bool replace(const std::vector<BasicBlock *> BBs);
 
-
   class BBNodeCmp {
     GlobalNumberState *GlobalNumbers;
+
   public:
     BBNodeCmp(GlobalNumberState *GN) : GlobalNumbers(GN) {}
 
@@ -135,10 +74,11 @@ private:
   GlobalNumberState GlobalNumbers;
 };
 
-} // namespace
+} // end anonymous namespace
 
 char BBFactoring::ID = 0;
-static RegisterPass<BBFactoring> X("bbfactor", "BBFactoring Pass", false, false);
+static RegisterPass<BBFactoring> X("bbfactor", "BBFactoring Pass", false,
+                                   false);
 
 bool BBFactoring::runOnModule(Module &M) {
   if (skipModule(M))
@@ -160,10 +100,13 @@ bool BBFactoring::runOnModule(Module &M) {
 
   auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
-  for (auto it = HashedBBs.begin(), itEnd = HashedBBs.end(); it != itEnd; ++it) {
-    auto Element = BBTree.insert(std::make_pair(BBNode(it->second, it->first), IdenticalBlocksContainer.size()));
+  for (auto it = HashedBBs.begin(), itEnd = HashedBBs.end(); it != itEnd;
+       ++it) {
+    auto Element = BBTree.insert(std::make_pair(
+        BBNode(it->second, it->first), IdenticalBlocksContainer.size()));
     if (Element.second) {
-      IdenticalBlocksContainer.push_back(std::vector<BasicBlock *>(1, it->second));
+      IdenticalBlocksContainer.push_back(
+          std::vector<BasicBlock *>(1, it->second));
     } else {
       IdenticalBlocksContainer[Element.first->second].push_back(it->second);
     }
@@ -178,36 +121,34 @@ bool BBFactoring::runOnModule(Module &M) {
   }
 
   return Changed;
-
 }
 
-namespace {
-
-SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
-  std::set<const Value *> values;
-  SmallVector<Value *, 8> result;
+/// Get values, that were created outside of the basic block \p BB
+static SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
+  std::set<const Value *> Values;
+  SmallVector<Value *, 8> Result;
   for (auto &I : BB->getInstList()) {
-    values.insert(&I);
+    Values.insert(&I);
     if (isa<TerminatorInst>(I))
       continue;
 
     for (auto &Ops : I.operands()) {
       if (isa<Constant>(Ops.get()))
         continue;
-      if (values.find(Ops.get()) == values.end()) {
-        result.push_back(Ops.get());
-        values.insert(Ops.get());
+      if (Values.find(Ops.get()) == Values.end()) {
+        Result.push_back(Ops.get());
+        Values.insert(Ops.get());
       }
     }
   }
-  return result;
+  return Result;
 }
 
-/// isInstUsedOutsideOfBB - Return true if there are any uses of Inst outside of the
-/// specified block. This function doesn't consider Phi nodes as a special case,
-/// but deals with TerminatorInst's like instructions in other block.
-bool isValUsedOutsideOfBB(const Value *InstOriginal, const BasicBlock *BB) {
-
+/// This function is like isInstUsedOutsideOfBB, but doesn't
+/// consider Phi nodes as a special case, It also deals with TerminatorInst's
+/// like instructions in other block.
+static bool isValUsedOutsideOfBB(const Value *InstOriginal,
+                                 const BasicBlock *BB) {
   for (const Use &U : InstOriginal->uses()) {
     const Instruction *I = cast<Instruction>(U.getUser());
     if (I->getParent() != BB || isa<TerminatorInst>(I))
@@ -216,10 +157,11 @@ bool isValUsedOutsideOfBB(const Value *InstOriginal, const BasicBlock *BB) {
   return false;
 }
 
-SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
+/// Get values, that are used outside of the basic block \p BB
+static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   SmallVector<size_t, 8> result;
   size_t current = 0;
-  auto IE = isa<TerminatorInst>(BB->back()) ? --BB->end() : BB->end();
+  auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
   for (auto I = BB->begin(); I != IE; ++I, ++current) {
     if (isValUsedOutsideOfBB(&*I, BB)) {
       result.push_back(current);
@@ -228,39 +170,50 @@ SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   return result;
 }
 
-SmallVector<Value *, 8> convertOutput(BasicBlock *BB,
-                                      const SmallVectorImpl<size_t> &numInstr) {
+/// Converts instruction numbers in basic block \p BB
+/// into Values * \p NumsInstr
+static SmallVector<Value *, 8>
+convertOutput(BasicBlock *BB, const SmallVectorImpl<size_t> &NumsInstr) {
   SmallVector<Value *, 8> Result;
-  Result.reserve(numInstr.size());
-  if (numInstr.empty())
+  Result.reserve(NumsInstr.size());
+  if (NumsInstr.empty())
     return Result;
   auto It = BB->begin();
-  std::advance(It, numInstr.front());
+  std::advance(It, NumsInstr.front());
   Result.push_back(&*It);
-  for (size_t i = 1; i < numInstr.size(); ++i) {
-    std::advance(It, numInstr[i] - numInstr[i-1]);
+  for (size_t i = 1, isz = NumsInstr.size(); i < isz; ++i) {
+    std::advance(It, NumsInstr[i] - NumsInstr[i - 1]);
     Result.push_back(&*It);
   }
   return Result;
 }
 
-Value *convertOutput(BasicBlock *BB, const size_t numInstr) {
-  if (BB->size() <= numInstr)
+static Value *convertOutput(BasicBlock *BB, const size_t NumInstr) {
+  if (BB->size() <= NumInstr)
     return nullptr;
   auto It = BB->begin();
-  std::advance(It, numInstr);
+  std::advance(It, NumInstr);
   return &*It;
 }
 
-
-size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
-  return find_if(Outputs.rbegin(), Outputs.rend(), [](Value *V) { return V->getType()->isFirstClassType(); }) - Outputs.rbegin();
+/// Select an out operand to be a function return value
+static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
+  return find_if(Outputs.rbegin(), Outputs.rend(),
+                 [](Value *V) { return V->getType()->isFirstClassType(); }) -
+         Outputs.rbegin();
 }
 
-Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input,
-                           const SmallVectorImpl<Value *> &Output, const Value *ReturnValue) {
+/// Creates new function, that consists of Basic block \p BB
+/// \param Input - values, which types are input function arguments.
+/// \param Output - values, which types with added pointer are
+/// output function arguments. They follow right after Input params.
+/// \param ReturnValue - value, which type is function's return value.
+static Function *createFuncFromBB(BasicBlock *BB,
+                                  const ArrayRef<Value *> &Input,
+                                  const ArrayRef<Value *> &Output,
+                                  const Value *ReturnValue) {
   Module *M = BB->getModule();
-  const DataLayout& Layout = M->getDataLayout();
+  const DataLayout &Layout = M->getDataLayout();
   // create Function
   SmallVector<Type *, 8> Params;
   Params.reserve(Input.size() + Output.size());
@@ -268,27 +221,31 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   std::transform(Input.begin(), Input.end(), std::back_inserter(Params),
                  [](const Value *V) { return V->getType(); });
 
-  Type *FunctionReturnT = ReturnValue ?
-                          ReturnValue->getType() :
-                          llvm::Type::getVoidTy(M->getContext());
+  Type *FunctionReturnT = ReturnValue ? ReturnValue->getType()
+                                      : llvm::Type::getVoidTy(M->getContext());
 
   transform(Output.begin(), Output.end(), std::back_inserter(Params),
-            [](const Value *V) {return PointerType::get(V->getType(), 0); });
+            [](const Value *V) { return PointerType::get(V->getType(), 0); });
 
   llvm::FunctionType *FType = FunctionType::get(FunctionReturnT, Params, false);
-  llvm::Function *F = Function::Create(FType, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
+  llvm::Function *F = Function::Create(
+      FType, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
   // add some attributes
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
 
-  for (size_t i = Input.size() + 1; i < Params.size() + 1; ++i) {
+  for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
+    F->addAttribute(
+        static_cast<unsigned>(i),
+        llvm::Attribute::get(M->getContext(),
+                             llvm::Attribute::AttrKind::Dereferenceable,
+                             Layout.getTypeStoreSize(
+                                 Params[i - 1]->getSequentialElementType())));
     F->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::Dereferenceable,
-                      Layout.getTypeStoreSize(Params[i-1]->getSequentialElementType())));
-    F->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(M->getContext(), llvm::Attribute::AttrKind::NoAlias));
+                    llvm::Attribute::get(M->getContext(),
+                                         llvm::Attribute::AttrKind::NoAlias));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -298,11 +255,11 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   {
     auto ArgIt = F->arg_begin();
 
-    for (auto It = Input.begin(); It != Input.end(); ++It) {
+    for (auto It = Input.begin(), EIt = Input.end(); It != EIt; ++It) {
       InputToArgs.insert(std::make_pair(*It, &*ArgIt++));
     }
-    for (auto It = Output.begin(); It != Output.end(); ++It) {
-        OutputToArgs.insert(std::make_pair(*It, &*ArgIt++));
+    for (auto It = Output.begin(), EIt = Output.end(); It != EIt; ++It) {
+      OutputToArgs.insert(std::make_pair(*It, &*ArgIt++));
     }
     assert(ArgIt == F->arg_end());
   }
@@ -324,11 +281,10 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
         Op.set(it->second);
       }
     }
-    auto found = OutputToArgs.find(&I);
-    if (found != OutputToArgs.end()) {
-      Builder.CreateStore(Inserted, found->second);
-    }
-    else if (&I == ReturnValue) {
+    auto Found = OutputToArgs.find(&I);
+    if (Found != OutputToArgs.end()) {
+      Builder.CreateStore(Inserted, Found->second);
+    } else if (&I == ReturnValue) {
       assert(ReturnValueF == nullptr);
       ReturnValueF = Inserted;
     }
@@ -341,25 +297,28 @@ Function *createFuncFromBB(BasicBlock *BB, const SmallVectorImpl<Value *> &Input
   return F;
 }
 
-SmallVector<Instruction *, 8> createAllocaInstructions(IRBuilder<> &builder,
-                                                       const Function::arg_iterator ItBegin,
-                                                       const Function::arg_iterator ItEnd) {
+static SmallVector<Instruction *, 8>
+createAllocaInstructions(IRBuilder<> &Builder,
+                         const Function::arg_iterator ItBegin,
+                         const Function::arg_iterator ItEnd) {
   SmallVector<Instruction *, 8> result;
   for (auto It = ItBegin; It != ItEnd; ++It) {
-    result.push_back(builder.CreateAlloca(It->getType()->getPointerElementType()));
+    result.push_back(
+        Builder.CreateAlloca(It->getType()->getPointerElementType()));
   }
   return result;
 }
 
-bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
-                               const ArrayRef<Value *> &Input,
-                               const ArrayRef<Value *> &Output,
-                               Value *Result) {
+static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
+                                      const ArrayRef<Value *> &Input,
+                                      const ArrayRef<Value *> &Output,
+                                      Value *Result) {
 
   // create New Basic Block
 
-  std::string newName = BB->getName();
-  BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
+  std::string NewName = BB->getName();
+  BasicBlock *NewBB =
+      BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> builder(NewBB);
   SmallVector<Value *, 8> Args;
   assert(F->arg_size() == Input.size() + Output.size());
@@ -367,8 +326,8 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   copy(Input.begin(), Input.end(), std::back_inserter(Args));
   auto OutputArgStart = F->arg_begin();
   std::advance(OutputArgStart, Input.size());
-  auto outputAllocas = createAllocaInstructions(builder,
-    OutputArgStart, F->arg_end());
+  auto outputAllocas =
+      createAllocaInstructions(builder, OutputArgStart, F->arg_end());
   copy(outputAllocas.begin(), outputAllocas.end(), std::back_inserter(Args));
 
   Instruction *CallFunc = builder.CreateCall(F, Args);
@@ -376,8 +335,8 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
     Result->replaceAllUsesWith(CallFunc);
 
   // remove basic block, replacing all Uses
-  
-  for (size_t i = 0; i < Output.size(); ++i) {
+
+  for (size_t i = 0, esz = Output.size(); i < esz; ++i) {
     if (isValUsedOutsideOfBB(Output[i], BB)) {
       auto Inst = builder.CreateLoad(outputAllocas[i]);
       Output[i]->replaceAllUsesWith(Inst);
@@ -393,29 +352,14 @@ bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   BB->replaceAllUsesWith(NewBB);
   BB->eraseFromParent();
 
-  NewBB->setName(newName);
+  NewBB->setName(NewName);
   return true;
 }
 
-template <typename T>
-struct SmallVectorImplComp
-{
-  bool operator()(const SmallVectorImpl<T>& v1, const SmallVectorImpl<T>& v2) const noexcept {
-    if (v1.size() != v2.size())
-      return v1.size() < v2.size();
-    for (auto i1 = v1.begin(), i2 = v2.begin(), e1 = v1.end(); i1 != e1; ++i1, ++i2) {
-      if (*i1 != *i2) {
-        return *i1 < *i2;
-      }
-    }
-    return false;
-  }
-};
+using SetOfVectors = std::set<SmallVector<size_t, 8>>;
 
-using SetOfVectors = std::set<SmallVector<size_t, 8>, SmallVectorImplComp<size_t>>;
-
-/// Merges set of sorted vectors in sorted vector of unique values
-SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
+/// Merges set of sorted vectors into sorted vector of unique values
+static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   SmallVector<size_t, 8> Result;
   if (Outputs.size() == 0) {
     return Result;
@@ -423,15 +367,13 @@ SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   if (Outputs.size() == 1) {
     return *Outputs.begin();
   }
-
-  using ItCurrentEnd = std::pair<
-      SmallVectorImpl<size_t>::const_iterator,
-      const SmallVectorImpl<size_t>::const_iterator
-  >;
+  // iterator pair begin/const end
+  using ItCurrentEnd = std::pair<SmallVectorImpl<size_t>::const_iterator,
+                                 const SmallVectorImpl<size_t>::const_iterator>;
   SmallVector<ItCurrentEnd, 8> Its;
 
   std::transform(Outputs.begin(), Outputs.end(), std::back_inserter(Its),
-                 [](const SmallVectorImpl<size_t> &Impl){
+                 [](const SmallVectorImpl<size_t> &Impl) {
                    return std::make_pair(Impl.begin(), Impl.end());
                  });
 
@@ -439,13 +381,12 @@ SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   while (true) {
     size_t NextMin = std::numeric_limits<size_t>::max();
     bool Done = true;
-    for (auto It : Its) {
+    for (auto &It : Its) {
       if (It.first == It.second)
         continue;
       if (*It.first == CurMin)
         ++It.first;
-      else if (*It.first < NextMin)
-      {
+      else if (*It.first < NextMin) {
         NextMin = *It.first;
         Done = false;
       }
@@ -456,11 +397,8 @@ SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
     CurMin = NextMin;
   }
 
-  return  Result;
+  return Result;
 }
-
-
-} // namespace
 
 bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   if (BBs.front()->size() <= 4) {
@@ -470,42 +408,40 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
     return false;
   }
 
-  std::vector<SmallVector<Value*, 8>> Inputs;
+  std::vector<SmallVector<Value *, 8>> Inputs;
   Inputs.reserve(BBs.size());
   SetOfVectors OutputsStorage;
   std::vector<SetOfVectors::const_iterator> Outputs;
   Outputs.reserve(BBs.size());
   for (auto BB : BBs) {
     Inputs.emplace_back(getInput(BB));
-    auto result = OutputsStorage.insert(getOutput(BB));
-    Outputs.emplace_back(result.first);
+    auto Result = OutputsStorage.insert(getOutput(BB));
+    Outputs.emplace_back(Result.first);
   }
   // Get function Output Values
-  SmallVector<size_t, 8> functionOutputIds = combineOutputs(OutputsStorage);
+  SmallVector<size_t, 8> FunctionOutputIds = combineOutputs(OutputsStorage);
 
   // Input Validation
-  assert(std::equal(std::next(Inputs.begin()), Inputs.end(),
-                       Inputs.begin(),
+  assert(std::equal(std::next(Inputs.begin()), Inputs.end(), Inputs.begin(),
                     [](const SmallVectorImpl<Value *> &Val1,
                        const SmallVectorImpl<Value *> &Val2) {
-                      bool Result = Val1.size() == Val2.size();
+                      if (Val1.size() != Val2.size())
+                        return false;
 
-                      Result = Result && std::equal(Val1.begin(), Val1.end(),
-                                                    Val2.begin(), Val2.end(),
-                                                    [](Value *V1, Value *V2) {
-                                                      return V1->getType() == V2->getType();
-                                                    });
-                      return Result;
-                    }
-  ));
+                      return std::equal(Val1.begin(), Val1.end(), Val2.begin(),
+                                        Val2.end(), [](Value *V1, Value *V2) {
+                                          return V1->getType() == V2->getType();
+                                        });
+                    }) &&
+         "Types of argument of equal BB must be equal");
 
-  if (functionOutputIds.size() > 4) {
+  if (FunctionOutputIds.size() > 4) {
     DEBUG(dbgs() << "Block family has many output parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
     return false;
   }
-  if (functionOutputIds.size() + Inputs.size() > 5) {
+  if (FunctionOutputIds.size() + Inputs.size() > 5) {
     DEBUG(dbgs() << "Block family has many parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
@@ -513,7 +449,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   }
 
   // Change output values according to function's return
-  auto FunctionOutput = convertOutput(BBs.front(), functionOutputIds);
+  auto FunctionOutput = convertOutput(BBs.front(), FunctionOutputIds);
   size_t ResultInstId = std::numeric_limits<size_t>::max();
   Value *ReturnF = nullptr;
   {
@@ -521,12 +457,12 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
     if (ReturnIdF != FunctionOutput.size()) {
       ReturnF = FunctionOutput[ReturnIdF];
       FunctionOutput.erase(FunctionOutput.begin() + ReturnIdF);
-      ResultInstId = functionOutputIds[ReturnIdF];
-      functionOutputIds.erase(functionOutputIds.begin() + ReturnIdF);
+      ResultInstId = FunctionOutputIds[ReturnIdF];
+      FunctionOutputIds.erase(FunctionOutputIds.begin() + ReturnIdF);
     }
   }
-  Function *F = createFuncFromBB(BBs.front(), Inputs.front(),
-                                 FunctionOutput, ReturnF);
+  Function *F =
+      createFuncFromBB(BBs.front(), Inputs.front(), FunctionOutput, ReturnF);
 
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));
@@ -534,8 +470,8 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
 
   SmallVector<Value *, 8> Out;
   SmallVector<size_t, 8> OutPoses;
-  for (size_t i = 0; i < BBs.size(); ++i) {
-    Out = convertOutput(BBs[i], functionOutputIds);
+  for (size_t i = 0, sz = BBs.size(); i < sz; ++i) {
+    Out = convertOutput(BBs[i], FunctionOutputIds);
     ReturnF = convertOutput(BBs[i], ResultInstId);
     replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out, ReturnF);
   }
