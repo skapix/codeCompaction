@@ -1,10 +1,22 @@
-//===- BBFactoring.cpp - Merge identical basic blocks ---------------------===//
+//===-- BBFactoring.cpp - Merge identical basic blocks -------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// This pass looks for equivalent basic blocks that are mergable and folds
+/// them.
+/// Bacic blocks comparison is the same as in MergeFunctions.cpp
+/// After finding identity BBs, pass creates new function, that consists of
+/// whole BB without terminator instruction and replaces these BBs with
+/// tail call to the newly created function.
+/// Pass is working with well-formed basic blocks, but terminator
+/// instruction is not required to be stated at the end of the block.
+///
 //===----------------------------------------------------------------------===//
 
 #include "../external/merging.h"
@@ -18,13 +30,35 @@
 #define DEBUG_TYPE "bbfactor"
 
 // TODO: ? place BB comparing in this file
-// TODO: tests tests tests
-// TODO: llvm code style: http://llvm.org/docs/CodingStandards.html
+
+// Future work:
+// 1) If function with 1 basic block already exists and all arguments are
+// the same as in the function, we want to create, use existed one to be called.
+// Example:
+// F0 { BB0, BB1, BB2 }
+// F1 { BB3, BB0 }
+// F2 { BB0 }
+// Where all BB0 are supposed to be identity BBs
+// turns into
+// F0 { call F2, BB1, BB2 }
+// F1 { BB2, call F2 }
+// F2 { BB0 }
+//
+// 2) Elaborate Basic Block replacing.
+//   a) If identical basic blocks have 2 subsets of output arguments and
+// power of each of 2 subsets is large enough, create 2 different functions.
+// Try to expand this logic on N (where N >= 2) subsets.
+// Check, whether this assumption is more profitable in size compaction,
+// than creating just 1 function.
+//   b) Filter some subset of identical BBs, which has too many
+// output parameters. Now pass discards all basic block if at least
+// one BB has too many output parameters.
 
 using namespace llvm;
 
 namespace {
-
+/// Auxiliary class, that holds basic block and it's hash.
+/// Used BB for comparison
 class BBNode {
   mutable BasicBlock *BB;
   BBComparator::BasicBlockHash Hash;
@@ -54,8 +88,13 @@ public:
   bool runOnModule(Module &M) override;
 
 private:
-  bool replace(const std::vector<BasicBlock *> BBs);
+  /// If profitable, creates function with body of BB and replaces BBs
+  /// with a call to new function
+  /// \param BBs - Vector of identity BBs
+  /// \returns whether BBs were replaced with a function call
+  bool replace(const std::vector<BasicBlock *> &BBs);
 
+  /// Comparator for BBNode
   class BBNodeCmp {
     GlobalNumberState *GlobalNumbers;
 
@@ -88,7 +127,7 @@ bool BBFactoring::runOnModule(Module &M) {
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
   std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
 
-  // calculate fingerprints for all basic blocks in every function
+  // calculate hashes for all basic blocks in every function
   for (auto &F : M.functions()) {
     if (!F.isDeclaration() && !F.hasAvailableExternallyLinkage()) {
       for (auto &BB : F.getBasicBlockList())
@@ -97,18 +136,18 @@ bool BBFactoring::runOnModule(Module &M) {
   }
 
   std::vector<std::vector<BasicBlock *>> IdenticalBlocksContainer;
-
   auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
-  for (auto it = HashedBBs.begin(), itEnd = HashedBBs.end(); it != itEnd;
-       ++it) {
-    auto Element = BBTree.insert(std::make_pair(
-        BBNode(it->second, it->first), IdenticalBlocksContainer.size()));
-    if (Element.second) {
+  // merge
+  for (auto It = HashedBBs.begin(), Ite = HashedBBs.end(); It != Ite; ++It) {
+    auto InsertedBBNode = BBTree.insert(std::make_pair(
+        BBNode(It->second, It->first), IdenticalBlocksContainer.size()));
+    if (InsertedBBNode.second) {
       IdenticalBlocksContainer.push_back(
-          std::vector<BasicBlock *>(1, it->second));
+          std::vector<BasicBlock *>(1, It->second));
     } else {
-      IdenticalBlocksContainer[Element.first->second].push_back(it->second);
+      IdenticalBlocksContainer[InsertedBBNode.first->second].push_back(
+          It->second);
     }
   }
 
@@ -123,16 +162,17 @@ bool BBFactoring::runOnModule(Module &M) {
   return Changed;
 }
 
-/// Get values, that were created outside of the basic block \p BB
+/// Get values, that were created outside of the basic block \p BB and
+/// are used inside of it.
 static SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
   std::set<const Value *> Values;
   SmallVector<Value *, 8> Result;
-  for (auto &I : BB->getInstList()) {
-    Values.insert(&I);
-    if (isa<TerminatorInst>(I))
-      continue;
+  auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+  for (auto I = BB->begin(); I != IE; ++I) {
+    Values.insert(&*I);
+    assert(!isa<TerminatorInst>(&*I) && "Malformed BB");
 
-    for (auto &Ops : I.operands()) {
+    for (auto &Ops : I->operands()) {
       if (isa<Constant>(Ops.get()))
         continue;
       if (Values.find(Ops.get()) == Values.end()) {
@@ -157,7 +197,9 @@ static bool isValUsedOutsideOfBB(const Value *InstOriginal,
   return false;
 }
 
-/// Get values, that are used outside of the basic block \p BB
+/// Get values, that are created inside this basic block \p BB and
+/// are used outside of it. Result is written as a vector
+/// of instruction's numerical order in Basic block.
 static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   SmallVector<size_t, 8> result;
   size_t current = 0;
@@ -188,6 +230,7 @@ convertOutput(BasicBlock *BB, const SmallVectorImpl<size_t> &NumsInstr) {
   return Result;
 }
 
+/// The same operation, but for one value
 static Value *convertOutput(BasicBlock *BB, const size_t NumInstr) {
   if (BB->size() <= NumInstr)
     return nullptr;
@@ -196,7 +239,7 @@ static Value *convertOutput(BasicBlock *BB, const size_t NumInstr) {
   return &*It;
 }
 
-/// Select an out operand to be a function return value
+/// Select a function return value from array of operands
 static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
   return find_if(Outputs.rbegin(), Outputs.rend(),
                  [](Value *V) { return V->getType()->isFirstClassType(); }) -
@@ -213,6 +256,7 @@ static Function *createFuncFromBB(BasicBlock *BB,
                                   const ArrayRef<Value *> &Output,
                                   const Value *ReturnValue) {
   Module *M = BB->getModule();
+  LLVMContext &Context = M->getContext();
   const DataLayout &Layout = M->getDataLayout();
   // create Function
   SmallVector<Type *, 8> Params;
@@ -221,8 +265,8 @@ static Function *createFuncFromBB(BasicBlock *BB,
   std::transform(Input.begin(), Input.end(), std::back_inserter(Params),
                  [](const Value *V) { return V->getType(); });
 
-  Type *FunctionReturnT = ReturnValue ? ReturnValue->getType()
-                                      : llvm::Type::getVoidTy(M->getContext());
+  Type *FunctionReturnT =
+      ReturnValue ? ReturnValue->getType() : llvm::Type::getVoidTy(Context);
 
   transform(Output.begin(), Output.end(), std::back_inserter(Params),
             [](const Value *V) { return PointerType::get(V->getType(), 0); });
@@ -236,16 +280,16 @@ static Function *createFuncFromBB(BasicBlock *BB,
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
 
+  // set attributes to all output params
   for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
+    F->addAttribute(static_cast<unsigned>(i),
+                    llvm::Attribute::get(
+                        Context, llvm::Attribute::AttrKind::Dereferenceable,
+                        Layout.getTypeStoreSize(
+                            Params[i - 1]->getSequentialElementType())));
     F->addAttribute(
         static_cast<unsigned>(i),
-        llvm::Attribute::get(M->getContext(),
-                             llvm::Attribute::AttrKind::Dereferenceable,
-                             Layout.getTypeStoreSize(
-                                 Params[i - 1]->getSequentialElementType())));
-    F->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(M->getContext(),
-                                         llvm::Attribute::AttrKind::NoAlias));
+        llvm::Attribute::get(Context, llvm::Attribute::AttrKind::NoAlias));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -263,32 +307,34 @@ static Function *createFuncFromBB(BasicBlock *BB,
     }
     assert(ArgIt == F->arg_end());
   }
-  // start filling function
-  BasicBlock *NewBB = BasicBlock::Create(M->getContext(), "Entry", F);
+  // Fill function, using BB with some changes:
+  // Replace all input values with Function arguments
+  // Store all output values to Function arguments
+  BasicBlock *NewBB = BasicBlock::Create(Context, "Entry", F);
   IRBuilder<> Builder(NewBB);
   Value *ReturnValueF = nullptr;
-  for (auto &I : BB->getInstList()) {
-    if (isa<TerminatorInst>(I)) {
-      assert(&I == &BB->back());
-      break;
-    }
+  auto Ie = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+  for (auto I = BB->begin(); I != Ie; ++I) {
+    Instruction *NewI = Builder.Insert(I->clone());
+    InputToArgs.insert(std::make_pair(&*I, NewI));
 
-    Instruction *Inserted = Builder.Insert(I.clone(), "");
-    InputToArgs.insert(std::make_pair(&I, Inserted));
-    for (auto &Op : Inserted->operands()) {
+    for (auto &Op : NewI->operands()) {
       auto it = InputToArgs.find(Op.get());
       if (it != InputToArgs.end()) {
         Op.set(it->second);
       }
     }
-    auto Found = OutputToArgs.find(&I);
+
+    auto Found = OutputToArgs.find(&*I);
     if (Found != OutputToArgs.end()) {
-      Builder.CreateStore(Inserted, Found->second);
-    } else if (&I == ReturnValue) {
-      assert(ReturnValueF == nullptr);
-      ReturnValueF = Inserted;
+      Builder.CreateStore(NewI, Found->second);
+    } else if (&*I == ReturnValue) {
+      assert(ReturnValueF == nullptr &&
+             "Function return value is already assigned");
+      ReturnValueF = NewI;
     }
   }
+
   if (ReturnValueF)
     Builder.CreateRet(ReturnValueF);
   else
@@ -297,18 +343,24 @@ static Function *createFuncFromBB(BasicBlock *BB,
   return F;
 }
 
+/// Function creates alloca instructions from \p ItBegin till \p ItEnd
+/// \returns Instructions, that are created by \p Builder
 static SmallVector<Instruction *, 8>
 createAllocaInstructions(IRBuilder<> &Builder,
                          const Function::arg_iterator ItBegin,
                          const Function::arg_iterator ItEnd) {
-  SmallVector<Instruction *, 8> result;
+  SmallVector<Instruction *, 8> Result;
   for (auto It = ItBegin; It != ItEnd; ++It) {
-    result.push_back(
+    Result.push_back(
         Builder.CreateAlloca(It->getType()->getPointerElementType()));
   }
-  return result;
+  return Result;
 }
 
+/// \param Input - \p BB operands to be used as an input arguments to \p F
+/// \param Output - \p BB operands to be used as an output arguments to \p F
+/// \param Result - \p BB instruction to be used as a result of \p F
+/// \returns true if \p BB was replaced with \p F, false otherwise
 static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                       const ArrayRef<Value *> &Input,
                                       const ArrayRef<Value *> &Output,
@@ -319,34 +371,35 @@ static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
   std::string NewName = BB->getName();
   BasicBlock *NewBB =
       BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
-  IRBuilder<> builder(NewBB);
+  IRBuilder<> Builder(NewBB);
   SmallVector<Value *, 8> Args;
-  assert(F->arg_size() == Input.size() + Output.size());
+  assert(F->arg_size() == Input.size() + Output.size() &&
+         "Argument sizes not match");
   Args.reserve(F->arg_size());
   copy(Input.begin(), Input.end(), std::back_inserter(Args));
   auto OutputArgStart = F->arg_begin();
   std::advance(OutputArgStart, Input.size());
-  auto outputAllocas =
-      createAllocaInstructions(builder, OutputArgStart, F->arg_end());
-  copy(outputAllocas.begin(), outputAllocas.end(), std::back_inserter(Args));
+  // Alloca instruction for Output function arguments
+  auto OutputAllocas =
+      createAllocaInstructions(Builder, OutputArgStart, F->arg_end());
+  copy(OutputAllocas.begin(), OutputAllocas.end(), std::back_inserter(Args));
 
-  Instruction *CallFunc = builder.CreateCall(F, Args);
+  Instruction *CallFunc = Builder.CreateCall(F, Args);
   if (Result)
     Result->replaceAllUsesWith(CallFunc);
 
   // remove basic block, replacing all Uses
-
   for (size_t i = 0, esz = Output.size(); i < esz; ++i) {
     if (isValUsedOutsideOfBB(Output[i], BB)) {
-      auto Inst = builder.CreateLoad(outputAllocas[i]);
+      auto Inst = Builder.CreateLoad(OutputAllocas[i]);
       Output[i]->replaceAllUsesWith(Inst);
     }
   }
 
   Instruction *TermInst = &BB->back();
   if (isa<TerminatorInst>(TermInst)) {
-    auto newTerm = builder.Insert(TermInst->clone());
-    TermInst->replaceAllUsesWith(newTerm);
+    auto NewTermInst = Builder.Insert(TermInst->clone());
+    TermInst->replaceAllUsesWith(NewTermInst);
   }
 
   BB->replaceAllUsesWith(NewBB);
@@ -359,6 +412,7 @@ static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
 using SetOfVectors = std::set<SmallVector<size_t, 8>>;
 
 /// Merges set of sorted vectors into sorted vector of unique values
+/// Example. combineOutputs : {{1, 2, 3}, {1, 2}, {1, 6}} => {1, 2, 3, 6}
 static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   SmallVector<size_t, 8> Result;
   if (Outputs.size() == 0) {
@@ -367,9 +421,13 @@ static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   if (Outputs.size() == 1) {
     return *Outputs.begin();
   }
-  // iterator pair begin/const end
+  // ItCurrentEnd::first points to the least element, that is
+  // still not in the resultant set
+  // ItCurrentEnd::second always points to the last element
+  // used as a right border
   using ItCurrentEnd = std::pair<SmallVectorImpl<size_t>::const_iterator,
                                  const SmallVectorImpl<size_t>::const_iterator>;
+  // vector of iterator pair, that steps from begin to end
   SmallVector<ItCurrentEnd, 8> Its;
 
   std::transform(Outputs.begin(), Outputs.end(), std::back_inserter(Its),
@@ -377,6 +435,10 @@ static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
                    return std::make_pair(Impl.begin(), Impl.end());
                  });
 
+  // Algorithm finds min element A through all iterators
+  // and pushes it in the resultant set.
+  // Then it increments all iterators, that point to A and repeat steps,
+  // untill all iterators reached theirs right border.
   size_t CurMin = std::numeric_limits<size_t>::max();
   while (true) {
     size_t NextMin = std::numeric_limits<size_t>::max();
@@ -400,7 +462,37 @@ static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
   return Result;
 }
 
-bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
+/// Selects an operand from \p BBOutputsIds to be function's return value and
+/// if found, removes it from \p BBOutputsIds.
+/// \param [in,out] BBOutputsIds - Values, that are created in \p BB and used
+/// either in terminator inst or in other basic block.
+/// \param [out] ReturnValueId - instruction number in \p BB, that is used as
+/// return value for the function
+static Function *
+createFunctionWithReturnValue(BasicBlock *BB, const ArrayRef<Value *> &BBInput,
+                              SmallVectorImpl<size_t> &BBOutputsIds,
+                              size_t &ReturnValueId) {
+  auto FunctionOutput = convertOutput(BB, BBOutputsIds);
+  ReturnValueId = std::numeric_limits<size_t>::max();
+  Value *ReturnF = nullptr;
+  // Find and remove (if found) return value from output list
+  size_t ReturnIdF = getFunctionRetValId(FunctionOutput);
+  if (ReturnIdF != FunctionOutput.size()) {
+    ReturnF = FunctionOutput[ReturnIdF];
+    FunctionOutput.erase(FunctionOutput.begin() + ReturnIdF);
+    ReturnValueId = BBOutputsIds[ReturnIdF];
+    BBOutputsIds.erase(BBOutputsIds.begin() + ReturnIdF);
+  }
+  Function *F = createFuncFromBB(BB, BBInput, FunctionOutput, ReturnF);
+
+  DEBUG(dbgs() << "Function created:");
+  DEBUG(F->print(dbgs()));
+  DEBUG(dbgs() << '\n');
+
+  return F;
+}
+
+bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   if (BBs.front()->size() <= 4) {
     DEBUG(dbgs() << "Block family is too small to bother merging. Block: "
                  << BBs.front()->getName() << ". Function: "
@@ -408,40 +500,39 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
     return false;
   }
 
-  std::vector<SmallVector<Value *, 8>> Inputs;
-  Inputs.reserve(BBs.size());
+  std::vector<SmallVector<Value *, 8>> BBInputs;
+  BBInputs.reserve(BBs.size());
   SetOfVectors OutputsStorage;
-  std::vector<SetOfVectors::const_iterator> Outputs;
-  Outputs.reserve(BBs.size());
+
+  // Most likely all BBs have the same set of input/output args
   for (auto BB : BBs) {
-    Inputs.emplace_back(getInput(BB));
-    auto Result = OutputsStorage.insert(getOutput(BB));
-    Outputs.emplace_back(Result.first);
+    BBInputs.emplace_back(getInput(BB));
+    OutputsStorage.insert(getOutput(BB));
   }
   // Get function Output Values
-  SmallVector<size_t, 8> FunctionOutputIds = combineOutputs(OutputsStorage);
+  SmallVector<size_t, 8> BBOutputsIds = combineOutputs(OutputsStorage);
 
   // Input Validation
-  assert(std::equal(std::next(Inputs.begin()), Inputs.end(), Inputs.begin(),
+  assert(std::equal(std::next(BBInputs.begin()), BBInputs.end(),
+                    BBInputs.begin(),
                     [](const SmallVectorImpl<Value *> &Val1,
                        const SmallVectorImpl<Value *> &Val2) {
-                      if (Val1.size() != Val2.size())
-                        return false;
-
-                      return std::equal(Val1.begin(), Val1.end(), Val2.begin(),
+                      return Val1.size() == Val2.size() &&
+                             std::equal(Val1.begin(), Val1.end(), Val2.begin(),
                                         Val2.end(), [](Value *V1, Value *V2) {
                                           return V1->getType() == V2->getType();
                                         });
-                    }) &&
-         "Types of argument of equal BB must be equal");
 
-  if (FunctionOutputIds.size() > 4) {
+                    }) &&
+         "Amount and types of argument of identity BBs must be equal");
+
+  if (BBOutputsIds.size() > 4) {
     DEBUG(dbgs() << "Block family has many output parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
     return false;
   }
-  if (FunctionOutputIds.size() + Inputs.size() > 5) {
+  if (BBOutputsIds.size() + BBInputs.size() > 5) {
     DEBUG(dbgs() << "Block family has many parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
@@ -449,31 +540,16 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> BBs) {
   }
 
   // Change output values according to function's return
-  auto FunctionOutput = convertOutput(BBs.front(), FunctionOutputIds);
-  size_t ResultInstId = std::numeric_limits<size_t>::max();
-  Value *ReturnF = nullptr;
-  {
-    size_t ReturnIdF = getFunctionRetValId(FunctionOutput);
-    if (ReturnIdF != FunctionOutput.size()) {
-      ReturnF = FunctionOutput[ReturnIdF];
-      FunctionOutput.erase(FunctionOutput.begin() + ReturnIdF);
-      ResultInstId = FunctionOutputIds[ReturnIdF];
-      FunctionOutputIds.erase(FunctionOutputIds.begin() + ReturnIdF);
-    }
-  }
-  Function *F =
-      createFuncFromBB(BBs.front(), Inputs.front(), FunctionOutput, ReturnF);
+  size_t ResultInstId;
+  Function *F = createFunctionWithReturnValue(BBs.front(), BBInputs.front(),
+                                              BBOutputsIds, ResultInstId);
 
-  DEBUG(dbgs() << "Function created:");
-  DEBUG(F->print(dbgs()));
-  DEBUG(dbgs() << '\n');
-
-  SmallVector<Value *, 8> Out;
-  SmallVector<size_t, 8> OutPoses;
+  // Values, that are passed as an output arguments to the function
+  SmallVector<Value *, 8> BBOutputs;
   for (size_t i = 0, sz = BBs.size(); i < sz; ++i) {
-    Out = convertOutput(BBs[i], FunctionOutputIds);
-    ReturnF = convertOutput(BBs[i], ResultInstId);
-    replaceBBWithFunctionCall(BBs[i], F, Inputs[i], Out, ReturnF);
+    BBOutputs = convertOutput(BBs[i], BBOutputsIds);
+    Value *ReturnF = convertOutput(BBs[i], ResultInstId);
+    replaceBBWithFunctionCall(BBs[i], F, BBInputs[i], BBOutputs, ReturnF);
   }
 
   return true;
