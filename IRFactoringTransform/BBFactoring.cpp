@@ -252,8 +252,8 @@ static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
 /// output function arguments. They follow right after Input params.
 /// \param ReturnValue - value, which type is function's return value.
 static Function *createFuncFromBB(BasicBlock *BB,
-                                  const ArrayRef<Value *> &Input,
-                                  const ArrayRef<Value *> &Output,
+                                  const ArrayRef<Value *> Input,
+                                  const ArrayRef<Value *> Output,
                                   const Value *ReturnValue) {
   Module *M = BB->getModule();
   LLVMContext &Context = M->getContext();
@@ -362,8 +362,8 @@ createAllocaInstructions(IRBuilder<> &Builder,
 /// \param Result - \p BB instruction to be used as a result of \p F
 /// \returns true if \p BB was replaced with \p F, false otherwise
 static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
-                                      const ArrayRef<Value *> &Input,
-                                      const ArrayRef<Value *> &Output,
+                                      const ArrayRef<Value *> Input,
+                                      const ArrayRef<Value *> Output,
                                       Value *Result) {
 
   // create New Basic Block
@@ -469,7 +469,7 @@ static SmallVector<size_t, 8> combineOutputs(const SetOfVectors &Outputs) {
 /// \param [out] ReturnValueId - instruction number in \p BB, that is used as
 /// return value for the function
 static Function *
-createFunctionWithReturnValue(BasicBlock *BB, const ArrayRef<Value *> &BBInput,
+createFunctionWithReturnValue(BasicBlock *BB, const ArrayRef<Value *> BBInput,
                               SmallVectorImpl<size_t> &BBOutputsIds,
                               size_t &ReturnValueId) {
   auto FunctionOutput = convertOutput(BB, BBOutputsIds);

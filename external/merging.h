@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#pragma once
+#ifndef LLVM_TRANSFORMS_MERGING_H
+#define LLVM_TRANSFORMS_MERGING_H
 
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Instructions.h"
@@ -341,3 +342,5 @@ private:
 };
 
 } // namespace llvm
+
+#endif // LLVM_TRANSFORMS_MERGING_H
