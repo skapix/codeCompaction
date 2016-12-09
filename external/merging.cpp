@@ -731,11 +731,15 @@ int BBComparator::cmpValues(const Value *L, const Value *R) const {
 // except termination instruction
 int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
                                        const BasicBlock *BBR) const {
-  BasicBlock::const_iterator InstL = BBL->begin(),
-    InstLE = isa<TerminatorInst>(*BBL->rbegin()) ? --BBL->end() : BBL->end();
-  BasicBlock::const_iterator InstR = BBR->begin(),
-    InstRE = isa<TerminatorInst>(*BBR->rbegin()) ? --BBR->end() : BBR->end();
+  // minimum BB size equals to 1 and if so, this instruction is TermInst,
+  // that is not checked
+  if (BBL->size() == 1 || BBR->size() == 1)
+    return BBL->size() == BBR->size();
 
+  BasicBlock::const_iterator InstL = BBL->begin(),
+    InstLE = isa<TerminatorInst>(BBL->back()) ? std::prev(BBL->end()) : BBL->end();
+  BasicBlock::const_iterator InstR = BBR->begin(),
+    InstRE = isa<TerminatorInst>(BBR->back()) ? std::prev(BBR->end()) : BBR->end();
   do {
     if (int Res = cmpValues(&*InstL, &*InstR))
       return Res;
