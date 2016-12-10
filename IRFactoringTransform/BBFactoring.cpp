@@ -10,11 +10,12 @@
 /// \file
 /// This pass looks for equivalent basic blocks that are mergable and folds
 /// them.
-/// Bacic blocks comparison is the same as in MergeFunctions.cpp
+/// Bacic blocks comparison is almost the same as in MergeFunctions.cpp, but
+/// commutativity check added
 /// After finding identity BBs, pass creates new function, that consists of
-/// whole BB without terminator instruction and replaces these BBs with
-/// tail call to the newly created function.
-/// Pass is working with well-formed basic blocks, but terminator
+/// whole BB without phi nodes and terminator instruction
+/// and replaces these BBs with tail call to the newly created function.
+/// Pass works only with well-formed basic blocks, but terminator
 /// instruction is not required to be stated at the end of the block.
 ///
 //===----------------------------------------------------------------------===//
@@ -29,7 +30,12 @@
 
 #define DEBUG_TYPE "bbfactor"
 
+// TODO: ? restrict pass to work only with well-formed BBs
 // TODO: ? place BB comparing in this file
+// TODO: perfomance issue: on replacing, remove just redundant instructions
+//       instead of substituting the whole BB
+// TODO: pick appropriate constants for filtering bad BB factorizing
+//       (# of outputs, # of inputs, # instructions in function)
 
 // Future work:
 // 1) If function with 1 basic block already exists and all arguments are
@@ -162,20 +168,30 @@ bool BBFactoring::runOnModule(Module &M) {
   return Changed;
 }
 
-/// Get values, that were created outside of the basic block \p BB and
-/// are used inside of it.
-static SmallVector<Value *, 8> getInput(const BasicBlock *BB) {
-  std::set<const Value *> Values;
+/// Returns vector of values:
+/// a) Phi nodes of the \p BB
+/// b) created outside of the \p BB and used inside of it
+static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
+  SmallPtrSet<const Value *, 8> Values;
   SmallVector<Value *, 8> Result;
+
+  auto I = BB->begin();
   auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
-  for (auto I = BB->begin(); I != IE; ++I) {
+  for (; I != IE && isa<PHINode>(I); ++I) {
+    Values.insert(&*I);
+    Result.push_back(&*I);
+  }
+
+  for (; I != IE; ++I) {
     Values.insert(&*I);
     assert(!isa<TerminatorInst>(&*I) && "Malformed BB");
 
     for (auto &Ops : I->operands()) {
       if (isa<Constant>(Ops.get()))
         continue;
-      if (Values.find(Ops.get()) == Values.end()) {
+
+
+      if (Values.count(Ops.get()) == 0) {
         Result.push_back(Ops.get());
         Values.insert(Ops.get());
       }
@@ -198,18 +214,32 @@ static bool isValUsedOutsideOfBB(const Value *InstOriginal,
 }
 
 /// Get values, that are created inside this basic block \p BB and
-/// are used outside of it. Result is written as a vector
-/// of instruction's numerical order in Basic block.
+/// are used outside of it and operands of PHI nodes of this BB
+/// Result is written as a vector of instruction's numerical order in BB
 static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
-  SmallVector<size_t, 8> result;
-  size_t current = 0;
+  SmallPtrSet<const Value *, 8> PhiOperands;
+  SmallVector<size_t, 8> Result;
+  size_t Current = 0;
+  auto I = BB->begin();
   auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
-  for (auto I = BB->begin(); I != IE; ++I, ++current) {
-    if (isValUsedOutsideOfBB(&*I, BB)) {
-      result.push_back(current);
+
+  for (; I != IE && isa<PHINode>(I); ++I, ++Current) {
+    auto PhiNode = cast<PHINode>(I);
+    for (auto &POp : PhiNode->operands()) {
+      if (Instruction * Inst = dyn_cast<Instruction>(POp)) {
+        if (Inst->getParent() == BB && !isa<PHINode>(Inst)) {
+          PhiOperands.insert(Inst);
+        }
+      }
     }
   }
-  return result;
+
+  for (; I != IE; ++I, ++Current) {
+    if (isValUsedOutsideOfBB(&*I, BB) || PhiOperands.count(&*I)) {
+      Result.push_back(Current);
+    }
+  }
+  return Result;
 }
 
 /// Converts instruction numbers in basic block \p BB
@@ -246,8 +276,10 @@ static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
          Outputs.rbegin();
 }
 
+// TODO: return nullptr if created function is too small
+
 /// Creates new function, that consists of Basic block \p BB
-/// \param Input - values, which types are input function arguments.
+/// \param Input - values, which types are input function arguments
 /// \param Output - values, which types with added pointer are
 /// output function arguments. They follow right after Input params.
 /// \param ReturnValue - value, which type is function's return value.
@@ -266,14 +298,14 @@ static Function *createFuncFromBB(BasicBlock *BB,
                  [](const Value *V) { return V->getType(); });
 
   Type *FunctionReturnT =
-      ReturnValue ? ReturnValue->getType() : llvm::Type::getVoidTy(Context);
+      ReturnValue ? ReturnValue->getType() : Type::getVoidTy(Context);
 
   transform(Output.begin(), Output.end(), std::back_inserter(Params),
             [](const Value *V) { return PointerType::get(V->getType(), 0); });
 
-  llvm::FunctionType *FType = FunctionType::get(FunctionReturnT, Params, false);
-  llvm::Function *F = Function::Create(
-      FType, llvm::GlobalValue::LinkageTypes::PrivateLinkage, "", M);
+  FunctionType *FType = FunctionType::get(FunctionReturnT, Params, false);
+  Function *F = Function::Create(
+      FType, GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
   // add some attributes
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
@@ -283,13 +315,13 @@ static Function *createFuncFromBB(BasicBlock *BB,
   // set attributes to all output params
   for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
     F->addAttribute(static_cast<unsigned>(i),
-                    llvm::Attribute::get(
-                        Context, llvm::Attribute::AttrKind::Dereferenceable,
+                    Attribute::get(
+                        Context, Attribute::AttrKind::Dereferenceable,
                         Layout.getTypeStoreSize(
                             Params[i - 1]->getSequentialElementType())));
     F->addAttribute(
         static_cast<unsigned>(i),
-        llvm::Attribute::get(Context, llvm::Attribute::AttrKind::NoAlias));
+        Attribute::get(Context, Attribute::AttrKind::NoAlias));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -313,8 +345,12 @@ static Function *createFuncFromBB(BasicBlock *BB,
   BasicBlock *NewBB = BasicBlock::Create(Context, "Entry", F);
   IRBuilder<> Builder(NewBB);
   Value *ReturnValueF = nullptr;
+  auto I = BB->begin();
+  // phi nodes should be kept in removed BB
+  for (; isa<PHINode>(&*I); ++I);
+
   auto Ie = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
-  for (auto I = BB->begin(); I != Ie; ++I) {
+  for (; I != Ie; ++I) {
     Instruction *NewI = Builder.Insert(I->clone());
     InputToArgs.insert(std::make_pair(&*I, NewI));
 
@@ -365,7 +401,6 @@ static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                       const ArrayRef<Value *> Input,
                                       const ArrayRef<Value *> Output,
                                       Value *Result) {
-
   // create New Basic Block
 
   std::string NewName = BB->getName();
@@ -373,10 +408,21 @@ static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
       BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> Builder(NewBB);
   SmallVector<Value *, 8> Args;
+  //Phi nodes should be at the beginning of new BB and the first arguments of
+  // our new function
+  for (auto I = BB->begin(); isa<PHINode>(&*I); ++I)
+  {
+    assert(I != std::prev(BB->end()) && "Blocks that consist of only phi nodes shouldn't reach here");
+    auto newPhi = Builder.Insert(I->clone(), I->getName());
+    Args.push_back(&*newPhi);
+    I->replaceAllUsesWith(newPhi);
+  }
+
   assert(F->arg_size() == Input.size() + Output.size() &&
          "Argument sizes not match");
   Args.reserve(F->arg_size());
-  copy(Input.begin(), Input.end(), std::back_inserter(Args));
+  // don't forget to skip phi nodes, that are already in Args
+  copy(Input.begin() + Args.size(), Input.end(), std::back_inserter(Args));
   auto OutputArgStart = F->arg_begin();
   std::advance(OutputArgStart, Input.size());
   // Alloca instruction for Output function arguments
@@ -526,13 +572,13 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
                     }) &&
          "Amount and types of argument of identity BBs must be equal");
 
-  if (BBOutputsIds.size() > 4) {
+  if (BBOutputsIds.size() > 8) {
     DEBUG(dbgs() << "Block family has many output parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
     return false;
   }
-  if (BBOutputsIds.size() + BBInputs.size() > 5) {
+  if (BBOutputsIds.size() + BBInputs.size() > 10) {
     DEBUG(dbgs() << "Block family has many parameters. Block: "
                  << BBs.front()->getName() << ". Function: "
                  << BBs.front()->getParent()->getName() << '\n');
