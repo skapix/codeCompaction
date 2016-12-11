@@ -190,7 +190,6 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
       if (isa<Constant>(Ops.get()))
         continue;
 
-
       if (Values.count(Ops.get()) == 0) {
         Result.push_back(Ops.get());
         Values.insert(Ops.get());
@@ -226,7 +225,7 @@ static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   for (; I != IE && isa<PHINode>(I); ++I, ++Current) {
     auto PhiNode = cast<PHINode>(I);
     for (auto &POp : PhiNode->operands()) {
-      if (Instruction * Inst = dyn_cast<Instruction>(POp)) {
+      if (Instruction *Inst = dyn_cast<Instruction>(POp)) {
         if (Inst->getParent() == BB && !isa<PHINode>(Inst)) {
           PhiOperands.insert(Inst);
         }
@@ -283,8 +282,7 @@ static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
 /// \param Output - values, which types with added pointer are
 /// output function arguments. They follow right after Input params.
 /// \param ReturnValue - value, which type is function's return value.
-static Function *createFuncFromBB(BasicBlock *BB,
-                                  const ArrayRef<Value *> Input,
+static Function *createFuncFromBB(BasicBlock *BB, const ArrayRef<Value *> Input,
                                   const ArrayRef<Value *> Output,
                                   const Value *ReturnValue) {
   Module *M = BB->getModule();
@@ -304,8 +302,8 @@ static Function *createFuncFromBB(BasicBlock *BB,
             [](const Value *V) { return PointerType::get(V->getType(), 0); });
 
   FunctionType *FType = FunctionType::get(FunctionReturnT, Params, false);
-  Function *F = Function::Create(
-      FType, GlobalValue::LinkageTypes::PrivateLinkage, "", M);
+  Function *F =
+      Function::Create(FType, GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
   // add some attributes
   F->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
@@ -314,14 +312,13 @@ static Function *createFuncFromBB(BasicBlock *BB,
 
   // set attributes to all output params
   for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
-    F->addAttribute(static_cast<unsigned>(i),
-                    Attribute::get(
-                        Context, Attribute::AttrKind::Dereferenceable,
-                        Layout.getTypeStoreSize(
-                            Params[i - 1]->getSequentialElementType())));
     F->addAttribute(
         static_cast<unsigned>(i),
-        Attribute::get(Context, Attribute::AttrKind::NoAlias));
+        Attribute::get(Context, Attribute::AttrKind::Dereferenceable,
+                       Layout.getTypeStoreSize(
+                           Params[i - 1]->getSequentialElementType())));
+    F->addAttribute(static_cast<unsigned>(i),
+                    Attribute::get(Context, Attribute::AttrKind::NoAlias));
   }
 
   // create auxiliary Map from Input to function arguments
@@ -347,7 +344,8 @@ static Function *createFuncFromBB(BasicBlock *BB,
   Value *ReturnValueF = nullptr;
   auto I = BB->begin();
   // phi nodes should be kept in removed BB
-  for (; isa<PHINode>(&*I); ++I);
+  for (; isa<PHINode>(&*I); ++I)
+    ;
 
   auto Ie = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
   for (; I != Ie; ++I) {
@@ -379,20 +377,6 @@ static Function *createFuncFromBB(BasicBlock *BB,
   return F;
 }
 
-/// Function creates alloca instructions from \p ItBegin till \p ItEnd
-/// \returns Instructions, that are created by \p Builder
-static SmallVector<Instruction *, 8>
-createAllocaInstructions(IRBuilder<> &Builder,
-                         const Function::arg_iterator ItBegin,
-                         const Function::arg_iterator ItEnd) {
-  SmallVector<Instruction *, 8> Result;
-  for (auto It = ItBegin; It != ItEnd; ++It) {
-    Result.push_back(
-        Builder.CreateAlloca(It->getType()->getPointerElementType()));
-  }
-  return Result;
-}
-
 /// \param Input - \p BB operands to be used as an input arguments to \p F
 /// \param Output - \p BB operands to be used as an output arguments to \p F
 /// \param Result - \p BB instruction to be used as a result of \p F
@@ -401,44 +385,60 @@ static bool replaceBBWithFunctionCall(BasicBlock *BB, Function *F,
                                       const ArrayRef<Value *> Input,
                                       const ArrayRef<Value *> Output,
                                       Value *Result) {
-  // create New Basic Block
-
   std::string NewName = BB->getName();
   BasicBlock *NewBB =
       BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> Builder(NewBB);
   SmallVector<Value *, 8> Args;
-  //Phi nodes should be at the beginning of new BB and the first arguments of
-  // our new function
-  for (auto I = BB->begin(); isa<PHINode>(&*I); ++I)
-  {
-    assert(I != std::prev(BB->end()) && "Blocks that consist of only phi nodes shouldn't reach here");
-    auto newPhi = Builder.Insert(I->clone(), I->getName());
-    Args.push_back(&*newPhi);
-    I->replaceAllUsesWith(newPhi);
-  }
+  auto GetValueForArgs = [&Builder](Value *V, Type *T) {
+    return V->getType() == T ? V : Builder.CreateBitCast(V, T);
+  };
 
   assert(F->arg_size() == Input.size() + Output.size() &&
          "Argument sizes not match");
   Args.reserve(F->arg_size());
-  // don't forget to skip phi nodes, that are already in Args
-  copy(Input.begin() + Args.size(), Input.end(), std::back_inserter(Args));
-  auto OutputArgStart = F->arg_begin();
-  std::advance(OutputArgStart, Input.size());
-  // Alloca instruction for Output function arguments
-  auto OutputAllocas =
-      createAllocaInstructions(Builder, OutputArgStart, F->arg_end());
-  copy(OutputAllocas.begin(), OutputAllocas.end(), std::back_inserter(Args));
+
+  // Construct our function argumemnts Args
+  // 1) Phi nodes that should be at the beginning of new BB
+  // and first arguments of our new function
+  auto CurArg = F->arg_begin();
+  for (auto I = BB->begin(); isa<PHINode>(&*I); ++I, ++CurArg) {
+    assert(I != std::prev(BB->end()) &&
+           "Blocks that consist of only phi nodes shouldn't reach here");
+    auto newPhi = Builder.Insert(I->clone(), I->getName());
+
+    Args.push_back(GetValueForArgs(&*newPhi, CurArg->getType()));
+    I->replaceAllUsesWith(newPhi);
+  }
+
+  assert(Args.size() <= Input.size() &&
+         "All Phi nodes should be included in Input list");
+
+  // 2) Append rest of Input arguments, that were created in other BB
+  for (auto I = Input.begin() + Args.size(), IE = Input.end(); I != IE;
+       ++I, ++CurArg) {
+    Args.push_back(GetValueForArgs(*I, CurArg->getType()));
+  }
+
+  // 3) Allocate space for output pointers, that are Output function arguments
+  for (auto IE = F->arg_end(); CurArg != IE; ++CurArg) {
+    Args.push_back(
+        Builder.CreateAlloca(CurArg->getType()->getPointerElementType()));
+  }
 
   Instruction *CallFunc = Builder.CreateCall(F, Args);
-  if (Result)
-    Result->replaceAllUsesWith(CallFunc);
+  if (Result) {
+    Value *ResultReplace = GetValueForArgs(CallFunc, Result->getType());
+    Result->replaceAllUsesWith(ResultReplace);
+  }
 
-  // remove basic block, replacing all Uses
-  for (size_t i = 0, esz = Output.size(); i < esz; ++i) {
-    if (isValUsedOutsideOfBB(Output[i], BB)) {
-      auto Inst = Builder.CreateLoad(OutputAllocas[i]);
-      Output[i]->replaceAllUsesWith(Inst);
+  // Save and Replace all Output values
+  auto AllocaIt = Args.begin() + Input.size();
+  for (auto I : Output) {
+    if (isValUsedOutsideOfBB(I, BB)) {
+      auto Inst = Builder.CreateLoad(*AllocaIt++);
+      auto BitCasted = GetValueForArgs(Inst, I->getType());
+      I->replaceAllUsesWith(BitCasted);
     }
   }
 
@@ -559,17 +559,18 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   SmallVector<size_t, 8> BBOutputsIds = combineOutputs(OutputsStorage);
 
   // Input Validation
-  assert(std::equal(std::next(BBInputs.begin()), BBInputs.end(),
-                    BBInputs.begin(),
-                    [](const SmallVectorImpl<Value *> &Val1,
-                       const SmallVectorImpl<Value *> &Val2) {
-                      return Val1.size() == Val2.size() &&
-                             std::equal(Val1.begin(), Val1.end(), Val2.begin(),
-                                        Val2.end(), [](Value *V1, Value *V2) {
-                                          return V1->getType() == V2->getType();
-                                        });
+  assert(std::equal(
+             std::next(BBInputs.begin()), BBInputs.end(), BBInputs.begin(),
+             [](const SmallVectorImpl<Value *> &Val1,
+                const SmallVectorImpl<Value *> &Val2) {
+               return Val1.size() == Val2.size() &&
+                      std::equal(Val1.begin(), Val1.end(), Val2.begin(),
+                                 Val2.end(), [](Value *V1, Value *V2) {
+                                   return V1->getType()->canLosslesslyBitCastTo(
+                                       V2->getType());
+                                 });
 
-                    }) &&
+             }) &&
          "Amount and types of argument of identity BBs must be equal");
 
   if (BBOutputsIds.size() > 8) {
