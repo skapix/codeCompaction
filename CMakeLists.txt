@@ -15,11 +15,7 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 project("LLVMTransform")
 
 if (NOT MSVC)
-  add_compile_options(-Wall -Wswitch)
-  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    #http://llvm.org/docs/CodingStandards.html#do-not-use-static-constructors
-    add_compile_options(-Wglobal-constructors)
-  endif()
+  add_compile_options(-Wall)
   # http://llvm.org/docs/CMake.html#developing-llvm-passes-out-of-source
   message(STATUS LLVM_ENABLE_RTTI=${LLVM_ENABLE_RTTI})
   if (NOT LLVM_ENABLE_RTTI)
