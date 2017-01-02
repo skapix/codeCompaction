@@ -30,12 +30,17 @@
 
 #define DEBUG_TYPE "bbfactor"
 
-// TODO: ? restrict pass to work only with well-formed BBs
-// TODO: ? place BB comparing in this file
 // TODO: perfomance issue: on replacing, remove just redundant instructions
 //       instead of substituting the whole BB
 // TODO: pick appropriate constants for filtering bad BB factorizing
 //       (# of outputs, # of inputs, # instructions in function)
+// TODO: not to create additional function if one of replacing BBs is
+//       the only BB in his function and # of parameters their
+//       types are matched or permutated. Take a look at future work 1.
+// TODO: when choosing llvm type, pick the most common,
+//       not the types from first BB
+// TODO: ? restrict pass to work only with well-formed BBs
+// TODO: ? place BB comparing in this file
 
 // Future work:
 // 1) If function with 1 basic block already exists and all arguments are
@@ -555,7 +560,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     BBInputs.emplace_back(getInput(BB));
     OutputsStorage.insert(getOutput(BB));
   }
-  // Get function Output Values
+  // Get function Output Values as union of all outputs
   SmallVector<size_t, 8> BBOutputsIds = combineOutputs(OutputsStorage);
 
   // Input Validation
@@ -598,6 +603,10 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     Value *ReturnF = convertOutput(BBs[i], ResultInstId);
     replaceBBWithFunctionCall(BBs[i], F, BBInputs[i], BBOutputs, ReturnF);
   }
+
+  DEBUG(dbgs() << BBs.size()
+               << " basic blocks were replaced with just created function "
+               << F->getName() << "\n");
 
   return true;
 }
