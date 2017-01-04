@@ -319,9 +319,9 @@ static Function *createFuncFromBB(BasicBlock *BB, const ArrayRef<Value *> Input,
   for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
     F->addAttribute(
         static_cast<unsigned>(i),
-        Attribute::get(Context, Attribute::AttrKind::Dereferenceable,
-                       Layout.getTypeStoreSize(
-                           Params[i - 1]->getSequentialElementType())));
+        Attribute::get(
+            Context, Attribute::AttrKind::Dereferenceable,
+            Layout.getTypeStoreSize(Params[i - 1]->getPointerElementType())));
     F->addAttribute(static_cast<unsigned>(i),
                     Attribute::get(Context, Attribute::AttrKind::NoAlias));
   }
