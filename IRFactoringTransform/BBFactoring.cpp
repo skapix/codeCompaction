@@ -173,6 +173,16 @@ bool BBFactoring::runOnModule(Module &M) {
   return Changed;
 }
 
+/// Retrieves end iterator
+/// Terminator instrtuction is not of our interest
+inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
+  return isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+}
+
+inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
+  return isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+}
+
 /// Returns vector of values:
 /// a) Phi nodes of the \p BB
 /// b) created outside of the \p BB and used inside of it
@@ -181,7 +191,7 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
   SmallVector<Value *, 8> Result;
 
   auto I = BB->begin();
-  auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+  auto IE = getEndIt(BB);
   for (; I != IE && isa<PHINode>(I); ++I) {
     Values.insert(&*I);
     Result.push_back(&*I);
@@ -225,7 +235,7 @@ static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   SmallVector<size_t, 8> Result;
   size_t Current = 0;
   auto I = BB->begin();
-  auto IE = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+  auto IE = getEndIt(BB);
 
   for (; I != IE && isa<PHINode>(I); ++I, ++Current) {
     auto PhiNode = cast<PHINode>(I);
@@ -280,6 +290,21 @@ static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
          Outputs.rbegin();
 }
 
+static bool canThrow(const BasicBlock *BB) {
+  auto it = BB->begin();
+  auto eit = getEndIt(BB);
+  // skip all phi nodes
+  for (; isa<PHINode>(it) && it != eit; ++it);
+
+  for (; it != eit; ++it) {
+    if (auto callInst = dyn_cast<CallInst>(it)) {
+      if (!callInst->getFunction()->hasFnAttribute(Attribute::NoUnwind))
+        return true;
+    }
+  }
+  return false;
+}
+
 // TODO: return nullptr if created function is too small
 
 /// Creates new function, that consists of Basic block \p BB
@@ -311,9 +336,16 @@ static Function *createFuncFromBB(BasicBlock *BB, const ArrayRef<Value *> Input,
       Function::Create(FType, GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
   // add some attributes
-  F->addAttribute(AttributeSet::FunctionIndex, Attribute::Naked);
-  F->addAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
-  F->addAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  F->addFnAttr(Attribute::Naked);
+  F->addFnAttr(Attribute::MinSize);
+  F->addFnAttr(Attribute::OptimizeForSize);
+  F->addFnAttr(Attribute::NoRecurse);
+
+  bool throws = canThrow(BB);
+  if (!throws)
+  {
+    F->addFnAttr(Attribute::NoUnwind);
+  }
 
   // set attributes to all output params
   for (size_t i = Input.size() + 1, ie = Params.size() + 1; i < ie; ++i) {
@@ -352,7 +384,7 @@ static Function *createFuncFromBB(BasicBlock *BB, const ArrayRef<Value *> Input,
   for (; isa<PHINode>(&*I); ++I)
     ;
 
-  auto Ie = isa<TerminatorInst>(BB->back()) ? std::prev(BB->end()) : BB->end();
+  auto Ie = getEndIt(BB);
   for (; I != Ie; ++I) {
     Instruction *NewI = Builder.Insert(I->clone());
     InputToArgs.insert(std::make_pair(&*I, NewI));
