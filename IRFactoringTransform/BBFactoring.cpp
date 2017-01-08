@@ -21,6 +21,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../external/merging.h"
+#include <llvm/ADT/Statistic.h>
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
@@ -30,6 +31,9 @@
 #include <set>
 
 #define DEBUG_TYPE "bbfactor"
+
+STATISTIC(MergeCounter, "Counts total number of merged basic blocks");
+STATISTIC(FunctionCounter, "Counts amount of created functions");
 
 // TODO: Compare without Phi Nodes
 // TODO: perfomance issue: on replacing, remove just redundant instructions
@@ -424,7 +428,7 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));
   DEBUG(dbgs() << '\n');
-
+  ++FunctionCounter;
   return F;
 }
 
@@ -436,6 +440,7 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   // check if this BB was already replaced
   if (Info.WasReplaced)
     return false;
+
   BasicBlock *BB = Info.BB;
   auto &Input = Info.Inputs;
   auto &Output = Info.Outputs;
@@ -508,6 +513,8 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   BB->eraseFromParent();
 
   NewBB->setName(NewName);
+
+  ++MergeCounter;
   return true;
 }
 
