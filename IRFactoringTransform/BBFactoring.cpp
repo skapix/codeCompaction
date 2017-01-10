@@ -314,13 +314,13 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
-///
-/// \param Infos
+// TODO: compare with common Outputs
+/// \param Infos Information about Basic Blocks
 /// \return whether code size will reduce if factored with creating new function
 static bool shouldCreateFunction(const ArrayRef<BBInfo> &Infos) {
   BasicBlock *BB = Infos.front().BB;
 
-  auto It = BB->begin(), EIt = getEndIt(BB);
+  auto It = getBeginIt(BB), EIt = getEndIt(BB);
   // approximately amount of instructions for the backend
   // assume general case, sizes of all instructions are equal
   size_t Points = 0;
@@ -339,13 +339,11 @@ static bool shouldCreateFunction(const ArrayRef<BBInfo> &Infos) {
   if (Points <= CallCost)
     return false;
 
-  size_t InstsBy1Replacement = Points - CallCost;
+  size_t InstsProfitBy1Replacement = Points - CallCost;
   // check if we don't lose created a function, and it's costs are lower,
   // than total gain of function replacement
-  if (Infos.size() * InstsBy1Replacement < Points)
-    return false;
+  return Infos.size() * InstsProfitBy1Replacement >= Points;
 
-  return true;
 }
 
 // TODO: set input attributes from created BB
