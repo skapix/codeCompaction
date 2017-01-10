@@ -734,13 +734,25 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
   // minimum BB size equals to 1 and if so, this instruction is TermInst,
   // that is not checked
   if (BBL->size() == 1 || BBR->size() == 1)
-    return BBL->size() == BBR->size();
+    return BBL->size() > BBR->size() ? 1 :
+           BBL->size() < BBR->size() ? -1 : 0;
 
+  assert(isa<TerminatorInst>(BBL->back()));
+  assert(isa<TerminatorInst>(BBR->back()));
+  // skip phi nodes and Terminator instructions
+  // We don't compare them in BBFactor because they are not part
+  // of factored function
   BasicBlock::const_iterator InstL = BBL->begin(),
-    InstLE = isa<TerminatorInst>(BBL->back()) ? std::prev(BBL->end()) : BBL->end();
+    InstLE = std::prev(BBL->end());
   BasicBlock::const_iterator InstR = BBR->begin(),
-    InstRE = isa<TerminatorInst>(BBR->back()) ? std::prev(BBR->end()) : BBR->end();
-  do {
+    InstRE = std::prev(BBR->end());
+
+  while (isa<PHINode>(InstL))
+    ++InstL;
+  while (isa<PHINode>(InstR))
+    ++InstR;
+
+  while (InstL != InstLE && InstR != InstRE) {
     if (int Res = cmpValues(&*InstL, &*InstR))
       return Res;
 
@@ -768,7 +780,7 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
 
     ++InstL;
     ++InstR;
-  } while (InstL != InstLE && InstR != InstRE);
+  }
 
   if (InstL != InstLE && InstR == InstRE)
     return 1;
