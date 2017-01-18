@@ -44,7 +44,7 @@ def checkFile(filename):
 	if not content0:
 		raise "Empty file " + filename
 	
-	query = constructOptWithLoadQuery(filename, "-S")
+	query = constructOptWithLoadQuery(filename, "-S -bbfactor-force-merging")
 	rc, content1 = createProcess(query)
 	if rc != 0:
 		raise Exception("File " + filename + "\nQuery: " + query + " returned " + str(rc) + "\nError:" + content1)

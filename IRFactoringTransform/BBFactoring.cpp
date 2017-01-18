@@ -26,6 +26,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -36,6 +37,13 @@
 
 STATISTIC(MergeCounter, "Counts total number of merged basic blocks");
 STATISTIC(FunctionCounter, "Counts amount of created functions");
+
+using namespace llvm;
+
+// used for testing
+static cl::opt<bool>
+    ForceMerge("bbfactor-force-merging", cl::Hidden,
+               cl::desc("Force folding basic blocks, when it is unprofitable"));
 
 // TODO: ? skip LandingPad Instructions
 // TODO: pick appropriate constants for filtering bad BB factorizing
@@ -51,8 +59,6 @@ STATISTIC(FunctionCounter, "Counts amount of created functions");
 //   b) Filter some subset of identical BBs, which has too many
 // output parameters. Now pass discards all basic block if at least
 // one BB has too many output parameters.
-
-using namespace llvm;
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -160,7 +166,6 @@ bool BBFactoring::runOnModule(Module &M) {
   return Changed;
 }
 
-
 /// \return end iterator of the factored part of \p BB
 static inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
   assert(isa<TerminatorInst>(BB->back()));
@@ -171,7 +176,6 @@ static inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
   assert(isa<TerminatorInst>(BB->back()));
   return std::prev(BB->end());
 }
-
 
 /// \return begin iterator of the factored part of \p BB
 static inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
@@ -302,7 +306,6 @@ static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
          Outputs.rbegin();
 }
 
-
 /// \return whether \p BB is able to throw
 static bool canThrow(const BasicBlock *BB) {
   auto It = getBeginIt(BB);
@@ -319,12 +322,13 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
-
 /// \param Model - the Basic block, which helps us to create a Function
 /// \param Sizes - amount of merging basic blocks
 /// \return whether code size will reduce if factored with creating new function
 static bool shouldCreateFunction(const BBInfo &Model, const size_t Sizes) {
   assert(Sizes >= 2);
+  if (ForceMerge)
+    return true;
   BasicBlock *BB = Model.BB;
 
   auto It = getBeginIt(BB), EIt = getEndIt(BB);
@@ -349,7 +353,7 @@ static bool shouldCreateFunction(const BBInfo &Model, const size_t Sizes) {
   size_t InstsProfitBy1Replacement = Points - CallCost;
   // check if we don't lose created a function, and it's costs are lower,
   // than total gain of function replacement
-  return Sizes * InstsProfitBy1Replacement >= Points;
+  return Sizes * InstsProfitBy1Replacement - Points >= 0;
 }
 
 // TODO: set input attributes from created BB
@@ -459,8 +463,8 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   return F;
 }
 
-
-/// \param Info - Basic block, which is going to be replaced with function call to \p F
+/// \param Info - Basic block, which is going to be replaced with function call
+/// to \p F
 /// \return true if \p BB was replaced with \p F, false otherwise
 static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   // check if this BB was already replaced
@@ -581,7 +585,6 @@ static BBOutputIds combineOutputs(const BBOutputStorage &Outputs) {
 
   return Result;
 }
-
 
 /// \param F - possible function to be merged with args \p Inputs, \p Outputs
 /// \returns true, if the Function F, that consists of 1 basic block can be used
@@ -802,7 +805,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
 
   findAndExtractReturnValue(*Model, BBInfos);
 
-   if (!shouldCreateFunction(*Model, NotReplaced)) {
+  if (!shouldCreateFunction(*Model, NotReplaced)) {
     debugPrint(BBs.front(), "Unprofitable replacement");
     return false;
   }
