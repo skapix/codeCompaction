@@ -288,21 +288,24 @@ struct BBInfo {
   BBOutputIdsRef OutputsIds;
   SmallVector<Value *, 8> Outputs;
 
+
   Value *ReturnVal = nullptr;
   bool WasReplaced = false;
+
+  void setReturnValue(const size_t InstNumInBB)
+  {
+    assert(ReturnVal == nullptr && "Return value should be set once");
+    size_t Index =
+      find(OutputsIds.get(), InstNumInBB) - OutputsIds.get().begin();
+    ReturnVal = Outputs[Index];
+    Outputs.erase(Outputs.begin() + Index);
+  }
 };
 
 } // end anonymous namespace
 
 using BBInfoRef = std::reference_wrapper<BBInfo>;
 using BBEqualInfoOutput = SmallVector<BBInfoRef, 8>;
-
-/// Select a function return value from array of operands
-static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
-  return find_if(Outputs.rbegin(), Outputs.rend(),
-                 [](Value *V) { return V->getType()->isFirstClassType(); }) -
-         Outputs.rbegin();
-}
 
 /// \return whether \p BB is able to throw
 static bool canThrow(const BasicBlock *BB) {
@@ -584,6 +587,13 @@ static BBOutputIds combineOutputs(const BBOutputStorage &Outputs) {
   return Result;
 }
 
+/// Select a function return value from array of operands
+static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
+  return find_if(Outputs.rbegin(), Outputs.rend(),
+                 [](Value *V) { return V->getType()->isFirstClassType(); }) -
+         Outputs.rbegin();
+}
+
 /// \param F - possible function to be merged with args \p Inputs, \p Outputs
 /// \returns true, if the Function F, that consists of 1 basic block can be used
 /// as a callee of other basic blocks
@@ -595,6 +605,10 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   assert(!isa<PHINode>(F->front().front()));
 
   bool NotVoid = F->getReturnType() != Type::getVoidTy(F->getContext());
+  if (Inputs.size() + Outputs.size() < F->arg_size() + NotVoid) {
+    // don't use functions with unused arguments
+    return false;
+  }
   assert(Inputs.size() + Outputs.size() == F->arg_size() + NotVoid);
 
   Value *ReturnVal = nullptr;
@@ -621,14 +635,42 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   return true;
 }
 
-static void extractReturnValue(BBInfo &Info, size_t InstNum) {
-  size_t Index =
-      find(Info.OutputsIds.get(), InstNum) - Info.OutputsIds.get().begin();
-  // don't erase Index in OutputsIds because we will not use it anymore
-  Info.ReturnVal = Info.Outputs[Index];
-  Info.Outputs.erase(Info.Outputs.begin() + Index);
+/// \param Info - the only basic block of its parent
+/// \return Id in output values of return value
+static size_t getFunctionReturnId(const BBInfo &Info) {
+  Function *F = Info.BB->getParent();
+  assert(F->size() == 1);
+  bool IsVoid = F->getReturnType() == Type::getVoidTy(F->getContext());
+  if (IsVoid)
+    return Info.OutputsIds.get().size();
+
+  Value *V = cast<ReturnInst>(F->front().back()).getReturnValue();
+  size_t Idx = find(Info.Outputs, V) - Info.Outputs.begin();
+  assert(Idx != Info.Outputs.size());
+  return Idx;
 }
 
+/// \param Model basic block, that is the only in its function
+/// \param Infos [in,out] Sets return value in Infos, found in Model
+static void extractReturnValueFromModelFunc(const BBInfo &Model,
+                                            SmallVectorImpl<BBInfoRef> &Infos) {
+  size_t ReturnIdF = getFunctionReturnId(Model);
+  if (ReturnIdF == Model.Outputs.size()) {
+    // return type void ~ nullptr
+    return;
+  }
+  ReturnIdF = Model.OutputsIds.get()[ReturnIdF];
+  for (BBInfo &Info : Infos) {
+    // model does not take part in replacing => it stays unchanged =>
+    // it should save its state for future replacing
+    if (Info.WasReplaced || std::addressof(Info) == std::addressof(Model))
+      continue;
+    Info.setReturnValue(ReturnIdF);
+  }
+}
+
+/// \param Model is used to find return value of this bb
+/// \param Infos [in, out] set return value, found in Model into infos
 static void findAndExtractReturnValue(const BBInfo &Model,
                                       std::vector<BBInfo> &Infos) {
   size_t ReturnIdF = getFunctionRetValId(Model.Outputs);
@@ -636,24 +678,12 @@ static void findAndExtractReturnValue(const BBInfo &Model,
     // return type void ~ nullptr
     return;
   }
-
   ReturnIdF = Model.OutputsIds.get()[ReturnIdF];
   for (BBInfo &Info : Infos) {
     if (Info.WasReplaced)
       continue;
-    extractReturnValue(Info, ReturnIdF);
+    Info.setReturnValue(ReturnIdF);
   }
-}
-
-/// \param Info - the only basic block of its parent
-/// \return Id in output values of return value
-static size_t getFunctionReturnId(const BBInfo &Info) {
-  Function *F = Info.BB->getParent();
-  assert(F->size() == 1);
-  Value *V = cast<ReturnInst>(F->front().back()).getReturnValue();
-  size_t Idx = find(Info.Outputs, V) - Info.Outputs.begin();
-  assert(Idx != Info.Outputs.size());
-  return Info.OutputsIds.get()[Idx];
 }
 
 /// \param BBs array of identical basic blocks with equal Input and Output
@@ -671,15 +701,14 @@ static bool tryMergeWithExistingF(SmallVectorImpl<BBInfoRef> &BBs) {
   }
   if (i == ei)
     return false;
-  debugPrint(BBs[i].get().BB, "Found suitable function with 1 Basic Block");
+  debugPrint(BBs[i].get().BB, "Found suitable function");
 
   Function *F = BBs[i].get().BB->getParent();
-  size_t Idx = getFunctionReturnId(BBs[i]);
+  extractReturnValueFromModelFunc(BBs[i], BBs);
 
   for (size_t j = 0, sz = BBs.size(); j < sz; ++j) {
     if (i == j)
       continue;
-    extractReturnValue(BBs[j], Idx);
     replaceBBWithFunctionCall(BBs[j], F);
     BBs[j].get().WasReplaced = true;
   }
