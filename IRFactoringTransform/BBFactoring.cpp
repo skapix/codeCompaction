@@ -208,9 +208,10 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
     assert(!isa<TerminatorInst>(I) && !isa<PHINode>(I) && "Malformed BB");
 
     for (auto &Ops : I->operands()) {
+      // global value is treated like constant
       if (isa<Constant>(Ops.get()))
         continue;
-      // TODO: check global variable
+
       if (Values.count(Ops.get()) == 0) {
         Result.push_back(Ops.get());
         Values.insert(Ops.get());
@@ -288,15 +289,13 @@ struct BBInfo {
   BBOutputIdsRef OutputsIds;
   SmallVector<Value *, 8> Outputs;
 
-
   Value *ReturnVal = nullptr;
   bool WasReplaced = false;
 
-  void setReturnValue(const size_t InstNumInBB)
-  {
+  void setReturnValue(const size_t InstNumInBB) {
     assert(ReturnVal == nullptr && "Return value should be set once");
     size_t Index =
-      find(OutputsIds.get(), InstNumInBB) - OutputsIds.get().begin();
+        find(OutputsIds.get(), InstNumInBB) - OutputsIds.get().begin();
     ReturnVal = Outputs[Index];
     Outputs.erase(Outputs.begin() + Index);
   }

@@ -28,8 +28,9 @@ class TestCreatingFunctions(unittest.TestCase):
 
 	def test_mergeWithFunc(self):
 		name = "mergeWithFunc.ll"
-		d, _ = checkFile(g_testCasesDir + name)
+		d, e = checkFile(g_testCasesDir + name)
 		self.assertEqual(d, 0)
+		self.assertFalse(e)
 
 	def test_structReturn(self):
 		name = "structReturn.ll"
@@ -45,6 +46,12 @@ class TestCreatingFunctions(unittest.TestCase):
 		name = "withExceptions.ll"
 		d, _ = checkFile(g_testCasesDir + name)
 		self.assertGreaterEqual(d, 1)
+
+	def test_withGlobalMerge(self):
+		name = "withGlobalMerge.ll"
+		d, e = checkFile(g_testCasesDir + name)
+		self.assertEqual(d, 0)
+		self.assertFalse(e)
 
 if __name__ == '__main__':
 	unittest.main() 
