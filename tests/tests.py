@@ -41,5 +41,10 @@ class TestCreatingFunctions(unittest.TestCase):
 		d, _ = checkFile(g_testCasesDir + name)
 		self.assertGreaterEqual(d, 1)
 
+	def test_withExceptions(self):
+		name = "withExceptions.ll"
+		d, _ = checkFile(g_testCasesDir + name)
+		self.assertGreaterEqual(d, 1)
+
 if __name__ == '__main__':
 	unittest.main() 

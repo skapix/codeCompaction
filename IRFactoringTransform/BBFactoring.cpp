@@ -26,7 +26,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -45,12 +44,11 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden,
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
-// TODO: ? skip LandingPad Instructions
 // TODO: pick appropriate constants for filtering bad BB factorizing
 //       (# of outputs, # of inputs, # instructions in function)
 // TODO: ? place BB comparing in this file
 
-// 1) Elaborate Basic Block replacing.
+// 1) ? Elaborate Basic Block replacing.
 //   a) If identical basic blocks have 2 subsets of output arguments and
 // power of each of 2 subsets is large enough, create 2 different functions.
 // Try to expand this logic on N (where N >= 2) subsets.
@@ -731,6 +729,11 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     debugPrint(BBs.front(), "Block family is too small to bother merging");
     return false;
   }
+  if (BBs.front()->isLandingPad()) {
+    debugPrint(BBs.front(), "Block family is a landing pad. Skip it");
+    return false;
+  }
+
   bool Changed = false;
 
   BBOutputStorage OutputStorage;
