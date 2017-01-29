@@ -25,6 +25,8 @@
 #include "../external/merging.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -332,16 +334,38 @@ static bool shouldCreateFunction(const BBInfo &Model, const size_t Sizes) {
   BasicBlock *BB = Model.BB;
 
   auto It = getBeginIt(BB), EIt = getEndIt(BB);
-  // approximately amount of instructions for the backend
+
+  // approximate amount of instructions for the backend
   // assume general case, sizes of all instructions are equal
   size_t Points = 0;
-  while (It != EIt && isa<PHINode>(It))
-    ++It;
+
   for (; It != EIt; ++It) {
-    // TODO: add more insts/operators, llvm intrinsics
-    if (isa<BitCastInst>(It) ||
-        isa<BitCastOperator>(It)) // TODO: difference between 2 of them
+    // skip instructions, that don't produce any code
+    if (isa<BitCastInst>(It))
       continue;
+    if (IntrinsicInst *Intr = dyn_cast<IntrinsicInst>(It)) {
+      using Intrinsic::ID;
+      const static std::set<Intrinsic::ID> NoCodeProduction = {
+          ID::lifetime_start,
+          ID::lifetime_end,
+          ID::donothing,
+          ID::invariant_start,
+          ID::invariant_end,
+          ID::invariant_group_barrier,
+          ID::var_annotation,
+          ID::ptr_annotation,
+          ID::annotation,
+          ID::dbg_declare,
+          ID::dbg_value,
+          ID::assume,
+          ID::instrprof_increment,
+          ID::instrprof_increment_step,
+          ID::instrprof_value_profile,
+          ID::pcmarker};
+
+      if (NoCodeProduction.count(Intr->getIntrinsicID()))
+        continue;
+    }
 
     ++Points;
   }
@@ -385,14 +409,15 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   Function *F =
       Function::Create(FType, GlobalValue::LinkageTypes::PrivateLinkage, "", M);
 
+  F->setCallingConv(CallingConv::Fast);
   // add some attributes
   F->addFnAttr(Attribute::Naked);
   F->addFnAttr(Attribute::MinSize);
   F->addFnAttr(Attribute::OptimizeForSize);
   // newly created function can't call itself
   F->addFnAttr(Attribute::NoRecurse);
-  bool throws = canThrow(BB);
-  if (!throws)
+  bool Throws = canThrow(BB);
+  if (!Throws)
     F->addFnAttr(Attribute::NoUnwind);
 
   // set attributes to all output params
@@ -501,13 +526,16 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   }
 
   // 3) Create a call
-  Instruction *LastBBInst = Builder.CreateCall(F, Args);
+  CallInst *TailCallInst = Builder.CreateCall(F, Args);
+  TailCallInst->setTailCallKind(CallInst::TailCallKind::TCK_Tail);
+  TailCallInst->setCallingConv(F->getCallingConv());
   if (Result) {
-    Value *ResultReplace = GetValueForArgs(LastBBInst, Result->getType());
+    Value *ResultReplace = GetValueForArgs(TailCallInst, Result->getType());
     Result->replaceAllUsesWith(ResultReplace);
   }
 
   // 4) Save and Replace all Output values
+  Value *LastBBInst = TailCallInst;
   auto AllocaIt = Args.begin() + Input.size();
   for (auto It = Output.begin(), EIt = Output.end(); It != EIt;
        ++It, ++AllocaIt) {
