@@ -1,7 +1,9 @@
 #!/usr/bin/python
 
+import os
+
 g_optimization = "-bbfactor"
-g_loadOptimization = "../build/libIRFactoringTransform.so"
+g_loadOptimization = os.path.dirname(os.path.abspath(__file__)) + "/../../build/libIRFactoringTransform.so"
 
 g_opt = "opt"
 
@@ -18,10 +20,10 @@ g_factoredDir = "tmpFactored"
 g_x64Dir = "tmpFactored/x64"
 g_armDir = "tmpFactored/arm"
 
-g_llcX64 = "llc -march=x86-64 -x86-asm-syntax=intel"
+g_llcX64 = "llc -march=x86-64" #--x86-asm-syntax=intel" # Some issues with compiling, using intel syntax
 g_llcArm = "llc -march=arm"
 
-g_gccX64 = "g++"
+g_gccX64 = "clang++"
 g_gccArm = "arm-none-eabi-g++ --specs=rdimon.specs -Wl,--start-group -lgcc -lc -lm -lrdimon -Wl,--end-group"
 
 g_arch = [[g_x64Dir, g_llcX64, g_gccX64], [g_armDir, g_llcArm, g_gccArm]]
