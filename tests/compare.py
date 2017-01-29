@@ -7,12 +7,12 @@ from utilities.constants import g_optWithLoad, g_arch, g_armDir, g_x64Dir, g_fac
 def help():
 	print('Program builds 2 binary files from llvm bitcode (.ll, .bc) for native (or specified architectures):  without optimizaton, with optimization. \nFurther it compares its code sizes\nIf program has unresolved links, use -c flag')
 
-def applyCompare(filenames):
+def applyCompare(filenames, additionalParams):
 	print("Original Size | sign | Optimized size")
 	for filename in filenames:
 		print("File:", filename)
 		try:
-			result = compareBinaryFileSizes(filename)
+			result = compareBinaryFileSizes(filename, additionalParams)
 			i = 0
 			for sizes in result:
 				if sizes[0] < sizes[1]:
@@ -41,12 +41,23 @@ if (sys.argv[1] == "--clean"):
 			shutil.rmtree(dirName)			
 	sys.exit()
 
+
 firstFilename = 1
-#helps if we have some unresolved links
-if sys.argv[1] == "-c":
-	g_arch[0][2] += " -c"
-	g_arch[1][2] += " -c"
-	firstFilename+=1
+additionalParams = ""
+# add -c, if there are unresolved links
+# add -b for force merging
+for i in range(1, len(sys.argv)):
+	param = sys.argv[i]
+	if param == "-c":
+		g_arch[0][2] += " -c"
+		g_arch[1][2] += " -c"
+		firstFilename+=1
+	elif param == "-b":
+		additionalParams += " --bbfactor-force-merging"
+		firstFilename+=1
+	else:
+		break
+
 
 filenames = []
 for i in range(firstFilename, len(sys.argv)):
@@ -60,5 +71,5 @@ for i in range(firstFilename, len(sys.argv)):
 	else:
 		filenames += [filename]
 
-applyCompare(filenames)
+applyCompare(filenames, additionalParams)
 

@@ -97,7 +97,7 @@ def compareBinaryFileSizes(filename, additionalParams = ""):
 	if not os.path.exists(g_factoredDir):
 		os.makedirs( g_factoredDir)
 
-	query = constructOptWithLoadQuery(filename,"-S", getFactoredName(filename))
+	query = constructOptWithLoadQuery(filename,"-S " + additionalParams, getFactoredName(filename))
 
 	retcode, out = createProcess(query)
 	if (retcode != 0):
