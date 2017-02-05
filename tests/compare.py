@@ -1,75 +1,54 @@
 #!/usr/bin/python
 
-import os, subprocess, sys, os.path, shutil, glob
-from utilities.functions import compareBinaryFileSizes
-from utilities.constants import g_optWithLoad, g_arch, g_armDir, g_x64Dir, g_factoredDir, g_cgreen, g_cred, g_cyellow, g_cend
+import os
+import subprocess
+import sys
+import os.path
+import shutil
+import glob
+from utilities.functions import compareBinaryFileSizes, printFailure, printError, printSuccess
+
 
 def help():
-	print('Program builds 2 binary files from llvm bitcode (.ll, .bc) for native (or specified architectures):  without optimizaton, with optimization. \nFurther it compares its code sizes\nIf program has unresolved links, use -c flag')
+    print('Program builds 2 binary files from some languages (currently .c, .cpp) for x86-64 and arm architectures:  with and without bbfactor optimizaton. \nFurther it compares code sizes of the created object files')
+
 
 def applyCompare(filenames, additionalParams):
-	print("Original Size | sign | Optimized size")
-	for filename in filenames:
-		print("File:", filename)
-		try:
-			result = compareBinaryFileSizes(filename, additionalParams)
-			i = 0
-			for sizes in result:
-				if sizes[0] < sizes[1]:
-					print(g_arch[i][0] + ":" + g_cred, sizes[0], " < ", sizes[1], g_cend)
-				elif sizes[0] == sizes[1]:
-					print(g_arch[i][0] + ":", sizes[0], "==", sizes[1])
-				else:
-					print(g_arch[i][0] + ":", g_cgreen + str(sizes[0]), " > ", sizes[1], g_cend)
-				i+=1
-		except Exception as inst:
-			print(g_cyellow + str(inst) + g_cend)
+    print("Original Size | sign | Optimized size")
+    for filename in filenames:
+        print("File:", filename)
+        try:
+            compareBinaryFileSizes(filename, additionalParams)
+        except Exception as inst:
+            printError(str(inst))
 
-#start program
+# start program
 
 if len(sys.argv) < 2:
-	print('File argument required\n use --help for info')
-	sys.exit()
+    print('File argument required\n use --help for info')
+    sys.exit()
 
 if (sys.argv[1] == "--help"):
-	help()
-	sys.exit()
+    help()
+    sys.exit()
 
 if (sys.argv[1] == "--clean"):
-	for dirName in [g_armDir, g_x64Dir, g_factoredDir]:
-		if os.path.exists(dirName):
-			shutil.rmtree(dirName)			
-	sys.exit()
-
-
-firstFilename = 1
-additionalParams = ""
-# add -c, if there are unresolved links
-# add -b for force merging
-for i in range(1, len(sys.argv)):
-	param = sys.argv[i]
-	if param == "-c":
-		g_arch[0][2] += " -c"
-		g_arch[1][2] += " -c"
-		firstFilename+=1
-	elif param == "-b":
-		additionalParams += " --bbfactor-force-merging"
-		firstFilename+=1
-	else:
-		break
+    if os.path.exists(g_commonDir):
+        shutil.rmtree(g_commonDir)
+    sys.exit()
 
 
 filenames = []
-for i in range(firstFilename, len(sys.argv)):
-	filename = sys.argv[i]
-	if not os.path.exists(filename):
-		print("File ", filename, " does not exist")
-		continue
-	if os.path.isdir(filename):
-		for f in glob.glob(filename + "/*.ll") + glob.glob(filename + "*.bc"):
-			filenames += [f]
-	else:
-		filenames += [filename]
+additionalParams = ""
+for i in range(1, len(sys.argv)):
+    filename = sys.argv[i]
+    if not os.path.exists(filename):
+        print("File ", filename, " does not exist")
+        continue
+    if os.path.isdir(filename):
+        for f in glob.glob(filename + "/*.ll") + glob.glob(filename + "*.bc"):
+            filenames += [f]
+    else:
+        filenames += [filename]
 
 applyCompare(filenames, additionalParams)
-

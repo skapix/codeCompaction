@@ -9,26 +9,44 @@ g_opt = "opt"
 
 g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
 
+# function identificator
 g_startStrIdent = "define "
+g_identLen = len(g_startStrIdent)
 
-g_identLen = len(g_startStrIdent) 
-
-
-# compare constants
-g_factoredDir = "tmpFactored"
-
-g_x64Dir = "tmpFactored/x64"
-g_armDir = "tmpFactored/arm"
-
-g_llcX64 = "llc -march=x86-64" #--x86-asm-syntax=intel" # Some issues with compiling, using intel syntax
-g_llcArm = "llc -march=arm"
-
-g_gccX64 = "clang++"
-g_gccArm = "arm-none-eabi-g++ --specs=rdimon.specs -Wl,--start-group -lgcc -lc -lm -lrdimon -Wl,--end-group"
-
-g_arch = [[g_x64Dir, g_llcX64, g_gccX64], [g_armDir, g_llcArm, g_gccArm]]
+g_armInclude = "/usr/arm-none-eabi/include/"
 
 
+class CompileInfo:
+    def __init__(self, program, defaultArgs, outputExt):
+        self.program = program
+        self.args = defaultArgs
+        self.ext = outputExt
+
+g_defaultClangOpts = "-emit-llvm -S -Oz"
+g_optCompileInfo = CompileInfo(
+    "opt", " -S -load " + g_loadOptimization + " " + g_optimization, ".ll")
+
+g_filenamesTo = {".cpp": CompileInfo("clang++", g_defaultClangOpts, ".ll"),
+                 ".c": CompileInfo("clang", g_defaultClangOpts + " -fno-unwind-tables", ".ll"),
+                 ".ll": CompileInfo("llc", "-filetype=obj", ".o"),
+                 ".bc": CompileInfo("llc", "-filetype=obj", ".o")}
+
+
+class ArchInfo:
+    def __init__(self, additionalArgs):
+        self.args = additionalArgs
+# arches to architecture-dependent arguments
+
+g_clangX64Arch = "-target x86_64-linux-gnu"
+g_clangArmArch = "-target arm-none-eabi -I" + g_armInclude
+g_arches = {"x64": {"clang++": ArchInfo(g_clangX64Arch), "clang": ArchInfo(g_clangX64Arch),
+                    "llc": ArchInfo("-march=x86-64")},
+            "arm": {"clang++": ArchInfo(g_clangArmArch), "clang": ArchInfo(g_clangArmArch),
+                    "llc": ArchInfo("-march=arm")}}
+
+g_commonDir = "tmpFactored"
+
+# print colors
 g_cgreen = '\33[32m'
 g_cred = '\33[31m'
 g_cend = '\33[0m'
