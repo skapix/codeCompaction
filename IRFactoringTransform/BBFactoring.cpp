@@ -26,7 +26,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -46,8 +45,10 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden,
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
-// TODO: pick appropriate constants for filtering bad BB factorizing
-//       (# of outputs, # of inputs, # instructions in function)
+// TODO: decide what to do with extra value of lifetime start/end intrinsic
+// Possible solutions:
+// a) remove the entries, which are the part of our block [easier to implement]
+// b) don't factor out these instructions into new function [preferable]
 // TODO: ? place BB comparing in this file
 
 // 1) ? Elaborate Basic Block replacing.
@@ -280,6 +281,8 @@ using BBOutputStorage = std::set<BBOutputIds>;
 
 namespace {
 
+/// Structure, that keeps all important information about basic blocks,
+/// that are going to be factor out
 struct BBInfo {
   BBInfo(BasicBlock *BB, BBOutputStorage &OutputStorage)
       : BB(BB), Inputs(getInput(BB)),
@@ -292,7 +295,6 @@ struct BBInfo {
   SmallVector<Value *, 8> Outputs;
 
   Value *ReturnVal = nullptr;
-  bool WasReplaced = false;
 
   void setReturnValue(const size_t InstNumInBB) {
     assert(ReturnVal == nullptr && "Return value should be set once");
@@ -324,28 +326,21 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
-/// \param Model - the Basic block, which helps us to create a Function
-/// \param Sizes - amount of merging basic blocks
-/// \return whether code size will reduce if factored with creating new function
-static bool shouldCreateFunction(const BBInfo &Model, const size_t Sizes) {
-  assert(Sizes >= 2);
-  if (ForceMerge)
-    return true;
-  BasicBlock *BB = Model.BB;
-
+/// Calculates Weight of basic block \p BB for further decisions
+static size_t getBBWeight(const BasicBlock *BB) {
   auto It = getBeginIt(BB), EIt = getEndIt(BB);
-
   // approximate amount of instructions for the backend
   // assume general case, sizes of all instructions are equal
   size_t Points = 0;
 
   for (; It != EIt; ++It) {
     // skip instructions, that don't produce any code
-    if (isa<BitCastInst>(It))
+    if (isa<BitCastInst>(It)) // TODO: add zext, icmp, ...
+      // because they can be omitted by code generator
       continue;
-    if (IntrinsicInst *Intr = dyn_cast<IntrinsicInst>(It)) {
+    if (const IntrinsicInst *Intr = dyn_cast<IntrinsicInst>(It)) {
       using Intrinsic::ID;
-      const static std::set<Intrinsic::ID> NoCodeProduction = {
+      static const std::set<Intrinsic::ID> NoCodeProduction = {
           ID::lifetime_start,
           ID::lifetime_end,
           ID::donothing,
@@ -369,15 +364,49 @@ static bool shouldCreateFunction(const BBInfo &Model, const size_t Sizes) {
 
     ++Points;
   }
+  return Points;
+}
 
-  size_t CallCost = 1 + 2 * Model.Outputs.size() + Model.Inputs.size();
-  if (Points <= CallCost)
-    return false;
+/// Decides, whether it is profitable to factor out without creating
+/// any functions
+/// \param Weight - basic block weight, returned by getBBWeight(const BasicBlock
+/// *)
+/// \param InputArgs - amount of input basic block arguments
+/// \param OutputArgs - amount of output basic block arguments
+/// \return true if profitable
+static bool isProfitableReplacement(const size_t Weight, const size_t InputArgs,
+                                    const size_t OutputArgs) {
+  if (ForceMerge)
+    return true;
+  size_t CallCost = 1 + 2 * OutputArgs + InputArgs;
+  return Weight > CallCost;
+}
 
-  size_t InstsProfitBy1Replacement = Points - CallCost;
+/// Decides, whether it is profitable to factor out BB, creating a function
+/// \param Weight - basic block weight, returned by getBBWeight(const BasicBlock
+/// *)
+/// \param BBAmount - amount of merging basic blocks
+/// \param InputArgs - amount of input basic block arguments
+/// \param OutputArgs - amount of output basic block arguments
+/// \return whether code size will reduce if factored with creating new function
+static bool shouldCreateFunction(const size_t Weight, const size_t BBAmount,
+                                 const size_t InputArgs,
+                                 const size_t OutputArgs) {
+  assert(BBAmount >= 2);
+  assert(isProfitableReplacement(Weight, InputArgs, OutputArgs) &&
+         "BBs with failed precheck of profitability shouldn't reach here");
+
+  if (ForceMerge)
+    return true;
+
+  const size_t CallCost = 1 + 2 * OutputArgs + InputArgs;
+  const size_t InstsProfitBy1Replacement = Weight - CallCost;
+  // count storing values for each output value and assume the worst case when
+  // we move values into convenient registers
+  const size_t FunctionCreationCost = Weight + 2 * OutputArgs + InputArgs;
   // check if we don't lose created a function, and it's costs are lower,
   // than total gain of function replacement
-  return Sizes * InstsProfitBy1Replacement - Points >= 0;
+  return BBAmount * InstsProfitBy1Replacement - FunctionCreationCost >= 0;
 }
 
 // TODO: set input attributes from created BB
@@ -484,6 +513,7 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   DEBUG(dbgs() << "Function created:");
   DEBUG(F->print(dbgs()));
   DEBUG(dbgs() << '\n');
+
   ++FunctionCounter;
   return F;
 }
@@ -493,9 +523,6 @@ static Function *createFuncFromBB(const BBInfo &Info) {
 /// \return true if \p BB was replaced with \p F, false otherwise
 static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   // check if this BB was already replaced
-  if (Info.WasReplaced)
-    return false;
-
   BasicBlock *BB = Info.BB;
   auto &Input = Info.Inputs;
   auto &Output = Info.Outputs;
@@ -629,7 +656,8 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   assert(F->size() == 1);
   if (F->isVarArg())
     return false;
-  assert(!isa<PHINode>(F->front().front()));
+  assert(!isa<PHINode>(F->front().front()) &&
+         "Functions with solo basic block can't contain any phi nodes");
 
   bool NotVoid = F->getReturnType() != Type::getVoidTy(F->getContext());
   if (Inputs.size() + Outputs.size() < F->arg_size() + NotVoid) {
@@ -641,7 +669,9 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   Value *ReturnVal = nullptr;
   if (NotVoid) {
     ReturnVal = cast<ReturnInst>(F->front().back()).getReturnValue();
-    Value *OurRetVal = Outputs[getFunctionRetValId(Outputs)];
+    size_t OutputId = getFunctionRetValId(Outputs);
+    assert(OutputId < Outputs.size() && "Wrong outputs identification");
+    Value *OurRetVal = Outputs[OutputId];
     if (OurRetVal != ReturnVal)
       return false;
   }
@@ -662,44 +692,9 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   return true;
 }
 
-/// \param Info - the only basic block of its parent
-/// \return Id in output values of return value
-static size_t getFunctionReturnId(const BBInfo &Info) {
-  Function *F = Info.BB->getParent();
-  assert(F->size() == 1);
-  bool IsVoid = F->getReturnType() == Type::getVoidTy(F->getContext());
-  if (IsVoid)
-    return Info.OutputsIds.get().size();
-
-  Value *V = cast<ReturnInst>(F->front().back()).getReturnValue();
-  size_t Idx = find(Info.Outputs, V) - Info.Outputs.begin();
-  assert(Idx != Info.Outputs.size());
-  return Idx;
-}
-
-/// \param Model basic block, that is the only in its function
-/// \param Infos [in,out] Sets return value in Infos, found in Model
-static void extractReturnValueFromModelFunc(const BBInfo &Model,
-                                            SmallVectorImpl<BBInfoRef> &Infos) {
-  size_t ReturnIdF = getFunctionReturnId(Model);
-  if (ReturnIdF == Model.Outputs.size()) {
-    // return type void ~ nullptr
-    return;
-  }
-  ReturnIdF = Model.OutputsIds.get()[ReturnIdF];
-  for (BBInfo &Info : Infos) {
-    // model does not take part in replacing => it stays unchanged =>
-    // it should save its state for future replacing
-    if (Info.WasReplaced || std::addressof(Info) == std::addressof(Model))
-      continue;
-    Info.setReturnValue(ReturnIdF);
-  }
-}
-
-/// \param Model is used to find return value of this bb
 /// \param Infos [in, out] set return value, found in Model into infos
-static void findAndExtractReturnValue(const BBInfo &Model,
-                                      std::vector<BBInfo> &Infos) {
+static void prepareForBBMerging(SmallVectorImpl<BBInfoRef> &Infos) {
+  const BBInfo &Model = Infos.front();
   size_t ReturnIdF = getFunctionRetValId(Model.Outputs);
   if (ReturnIdF == Model.Outputs.size()) {
     // return type void ~ nullptr
@@ -707,46 +702,31 @@ static void findAndExtractReturnValue(const BBInfo &Model,
   }
   ReturnIdF = Model.OutputsIds.get()[ReturnIdF];
   for (BBInfo &Info : Infos) {
-    if (Info.WasReplaced)
-      continue;
     Info.setReturnValue(ReturnIdF);
   }
 }
 
-/// \param BBs array of identical basic blocks with equal Input and Output
-/// \return false if no basic blocks were replaced, true otherwise
-static bool tryMergeWithExistingF(SmallVectorImpl<BBInfoRef> &BBs) {
-  // Try to find appropriate function
-  size_t i = 0, ei = BBs.size();
-  for (; i < ei; ++i) {
-    assert(!BBs[i].get().WasReplaced && "BBs should be filtered");
-    Function *F = BBs[i].get().BB->getParent();
+/// Tries to find appropriate function for factoring out
+/// \param BBs basic blocks, which parents are observed
+/// \return basic block, which function is suitable for merging
+/// or size of \p BBs if function was not found
+static size_t findAppropriateFunctionId(const ArrayRef<BBInfoRef> BBs) {
+  size_t i = 0;
+  for (size_t ei = BBs.size(); i < ei; ++i) {
+    const Function *F = BBs[i].get().BB->getParent();
     if (F->size() == 1) {
+      // check the order of passed arguments
       if (isRightOrder(F, BBs[i].get().Inputs, BBs[i].get().Outputs))
-        break;
+        return i;
     }
   }
-  if (i == ei)
-    return false;
-  debugPrint(BBs[i].get().BB, "Found suitable function");
-
-  Function *F = BBs[i].get().BB->getParent();
-  extractReturnValueFromModelFunc(BBs[i], BBs);
-
-  for (size_t j = 0, sz = BBs.size(); j < sz; ++j) {
-    if (i == j)
-      continue;
-    replaceBBWithFunctionCall(BBs[j], F);
-    BBs[j].get().WasReplaced = true;
-  }
-
-  return true;
+  return i;
 }
 
 /// \param BBInfos array of all basic blocks
 /// \return Infos, grouped by equal output
 static SmallVector<BBEqualInfoOutput, 8>
-combineByOutputsIds(std::vector<BBInfo> &BBInfos) {
+combineByOutputsIds(SmallVectorImpl<BBInfo> &BBInfos) {
   std::deque<BBInfoRef> BBRefInfos(BBInfos.begin(),
                                    BBInfos.end()); // list or deque
   // Most likely all BBs have the same set of output args
@@ -767,6 +747,39 @@ combineByOutputsIds(std::vector<BBInfo> &BBInfos) {
   }
   return Result;
 };
+
+static BBInfo *tryFindFuncAndReplace(SmallVectorImpl<BBInfoRef> &BBInfos) {
+  assert(BBInfos.size() >= 2 && "No sence in merging");
+
+  assert(std::find_if(BBInfos.begin() + 1, BBInfos.end(),
+                      [&BBInfos](const BBInfo &Info) {
+                        return &BBInfos[0].get().OutputsIds == &Info.OutputsIds;
+                      }) == BBInfos.end());
+
+  size_t Id = findAppropriateFunctionId(BBInfos);
+  if (Id == BBInfos.size()) {
+    return nullptr;
+  }
+
+  // erase function from the list, in order not to modify it
+  std::swap(BBInfos[Id],
+            BBInfos.back()); // TODO: check function to swap references
+  Function *F = BBInfos.back().get().BB->getParent();
+  BBInfo *Result = &BBInfos.back().get();
+  BBInfos.pop_back();
+
+  prepareForBBMerging(BBInfos);
+
+  for (auto &Info : BBInfos) {
+    replaceBBWithFunctionCall(Info, F);
+  }
+
+  DEBUG(dbgs() << BBInfos.size()
+               << " basic blocks were replaced with existed function "
+               << F->getName() << "\n");
+
+  return Result;
+}
 
 /// Common steps of replacing equal basic blocks
 /// 1) Separate basic blocks by output values into sets of basic blocks
@@ -790,10 +803,16 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     return false;
   }
 
+  size_t Weight = getBBWeight(BBs.front());
+  if (Weight <= 2) {
+    debugPrint(BBs.front(), "Block family is not worth merging");
+    return false;
+  }
+
   bool Changed = false;
 
   BBOutputStorage OutputStorage;
-  std::vector<BBInfo> BBInfos;
+  SmallVector<BBInfo, 8> BBInfos;
   BBInfos.reserve(BBs.size());
   std::transform(
       BBs.begin(), BBs.end(), std::back_inserter(BBInfos),
@@ -816,66 +835,66 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   SmallVector<BBEqualInfoOutput, 8> EqualOutputIds =
       combineByOutputsIds(BBInfos);
 
-  // at first we try to replace basic blocks without creating a function
-  // but functions should have the same output
+  SmallVector<BBInfoRef, 8> Unmerged;
+  Unmerged.reserve(BBInfos.size());
   for (auto &Outputs : EqualOutputIds) {
-    Changed |= tryMergeWithExistingF(Outputs);
+    if (!isProfitableReplacement(Weight, Outputs.front().get().Inputs.size(),
+                                 Outputs.front().get().Outputs.size())) {
+      continue;
+    }
+
+    if (Outputs.size() == 1) {
+      Unmerged.push_back(Outputs.front());
+      continue;
+    }
+    BBInfo *Info = tryFindFuncAndReplace(Outputs);
+    if (Info == nullptr) {
+      Unmerged.insert(Unmerged.end(), Outputs.begin(), Outputs.end());
+      continue;
+    }
+    Changed = true;
+    Unmerged.push_back(*Info);
   }
-  auto IfNotReplaced = [](const BBInfo &I) { return !I.WasReplaced; };
-  size_t NotReplaced =
-      (size_t)std::count_if(BBInfos.begin(), BBInfos.end(), IfNotReplaced);
-  assert(NotReplaced > 0 && "At least one should not be replaced");
-  if (NotReplaced == 1) {
-    // 1 is our function with solo body. All Basic blocks were replaced with
-    // call to the function. There is no sence in creating new one.
-    return true;
-  }
+
+  if (Unmerged.size() <= 1)
+    return Changed;
 
   // create common outputs and modify outputValues
   {
-    auto OutputsIds =
-        OutputStorage.emplace(combineOutputs(OutputStorage)).first;
-    for (auto &Info : BBInfos) {
+    const BBOutputIds &OutputsIds =
+        *OutputStorage.emplace(combineOutputs(OutputStorage)).first;
+    for (BBInfo &Info : Unmerged) {
       // if their sizes are not equal => common output differs from Info's
       // if was already replaces => meaningless to replace sth. there
       //   because this value won't be used
-      if (!Info.WasReplaced && &*OutputsIds != &Info.OutputsIds.get()) {
-        Info.OutputsIds = *OutputsIds; // copies just pointer
-        Info.Outputs = convertOutput(Info.BB, *OutputsIds);
+      if (OutputsIds.size() != Info.OutputsIds.get().size()) {
+        Info.OutputsIds = OutputsIds; // copies just pointer
+        Info.Outputs = convertOutput(Info.BB, OutputsIds);
       }
     }
   }
+
   // try again to replace, not creating function, but with common OutputsIds
-  {
-    BBEqualInfoOutput ActiveBBs;
-    std::copy_if(BBInfos.begin(), BBInfos.end(), std::back_inserter(ActiveBBs),
-                 IfNotReplaced);
-    Changed |= tryMergeWithExistingF(ActiveBBs);
-    NotReplaced =
-        (size_t)std::count_if(BBInfos.begin(), BBInfos.end(), IfNotReplaced);
-    if (NotReplaced == 1) {
-      return true;
-    }
-  }
+  if (tryFindFuncAndReplace(Unmerged) != nullptr)
+    return true;
 
-  // preparation to create function
-  auto Model = find_if(BBInfos, IfNotReplaced);
-  assert(Model != BBInfos.end());
+  BBInfo &Model = Unmerged.front();
 
-  findAndExtractReturnValue(*Model, BBInfos);
-
-  if (!shouldCreateFunction(*Model, NotReplaced)) {
+  if (!shouldCreateFunction(Weight, Unmerged.size(), Model.Inputs.size(),
+                            Model.Outputs.size())) {
     debugPrint(BBs.front(), "Unprofitable replacement");
-    return false;
+    return Changed;
   }
 
-  Function *F = createFuncFromBB(*Model);
+  prepareForBBMerging(Unmerged);
 
-  for (size_t i = 0, sz = BBs.size(); i < sz; ++i) {
-    Changed |= replaceBBWithFunctionCall(BBInfos[i], F);
+  Function *F = createFuncFromBB(Model);
+
+  for (auto &Info : Unmerged) {
+    replaceBBWithFunctionCall(Info, F);
   }
 
-  DEBUG(dbgs() << BBs.size()
+  DEBUG(dbgs() << Unmerged.size()
                << " basic blocks were replaced with just created function "
                << F->getName() << "\n");
 
