@@ -6,46 +6,107 @@ import sys
 import os.path
 import shutil
 import glob
-from utilities.functions import compareBinaryFileSizes, printFailure, printError, printSuccess
+import argparse
+from utilities.functions import *
+from utilities.compile import *
+from utilities.constants import *
+
+## compare utils
+
+def compileWithFrontend(filename, arch):
+    fileExt = getExt(filename)
+    irFile = filename
+    if not fileExt == ".ll" and not fileExt == ".bc":
+        frontend = Compile(filename, arch)
+        frontend.compile("") 
+        irFile = frontend.outputFile
+    
+
+    opt = createOptCompile(irFile, arch)
+    irOptFile = opt.outputFile
+    opt.compile("")
+
+    compileIr = Compile(irFile, arch)
+    compileIr.compile()
+    compileIrOpt = Compile(irOptFile, arch)
+    compileIrOpt.compile()
+    return [compileIr.outputFile, compileIrOpt.outputFile]
 
 
-def help():
-    print('Program builds 2 binary files from some languages (currently .c, .cpp) for x86-64 and arm architectures:  with and without bbfactor optimizaton. \nFurther it compares code sizes of the created object files')
+def getBinaryCodeSize(filename):
+    err, out = createProcess("size " + filename)
+    if err != 0:
+        raise "Can't get binary code size. Error: " + out
+    return int(out.split()[6])
 
 
-def applyCompare(filenames, additionalParams):
+def printSizes(f, fOpt):
+    if f < fOpt:
+        printFailure(str(f) + " < " + str(fOpt))
+    elif f == fOpt:
+        print(f, "==", fOpt)
+    else:
+        printSuccess(str(f) + " > " + str(fOpt))
+
+
+def compareBinaryFileSizes(filename, archList):
+    if (not os.path.exists(filename)):
+        raise Exception("File " + filename + " does not exist")
+    for arch in archList:
+        print(arch + ": ", end="")
+        try:
+            files = compileWithFrontend(filename, arch)
+            assert len(files) == 2, "Wrong final length size"
+            sz = getBinaryCodeSize(files[0])
+            szOpt = getBinaryCodeSize(files[1])
+            printSizes(sz, szOpt)
+        except Exception as e:
+            printError("Error: " + str(e))
+
+## end compare utils
+
+
+
+def applyCompare(filenames, arches):
     print("Original Size | sign | Optimized size")
     for filename in filenames:
         print("File:", filename)
         try:
-            compareBinaryFileSizes(filename, additionalParams)
+            compareBinaryFileSizes(filename, arches)
         except Exception as inst:
             printError(str(inst))
 
 # start program
+if __name__ == "__main__":
+    #prepare parser
+    parser = argparse.ArgumentParser(
+    description='Program builds 2 binary files from some languages\
+    (currently .ll, .bc .c, .cpp) for x86-64 and arm architectures:  with and without bbfactor optimizaton.\
+    Further it compares code sizes of the created object files')
 
-if len(sys.argv) < 2:
-    print('File argument required\n use --help for info')
-    sys.exit()
+    parser.add_argument('filenames', nargs='*', help='Filenames to be compared')
+    parser.add_argument('--arch', nargs='*', choices=g_arches.keys(), default=g_arches.keys(),
+                        help='Choose architecture. All by default')
+    parser.add_argument('--args', nargs='*', default="", type=parseAdditionalArguments,  help="Additional args in view like 'utility:extra flags'")
+    parser.add_argument('--clean', action='store_true', help="Remove temporary directory")
 
-if (sys.argv[1] == "--help"):
-    help()
-    sys.exit()
+    args = parser.parse_args()
 
-if (sys.argv[1] == "--clean"):
-    if os.path.exists(g_commonDir):
-        shutil.rmtree(g_commonDir)
-    sys.exit()
+    if (args.clean):
+        if os.path.exists(g_commonDir):
+            shutil.rmtree(g_commonDir)
+        sys.exit()
 
 
-filenames = []
-additionalParams = ""
-for i in range(1, len(sys.argv)):
-    filename = sys.argv[i]
-    if not os.path.exists(filename):
-        print("File ", filename, " does not exist")
-        continue
-    if not os.path.isdir(filename):
+    filenames = []
+    for filename in args.filenames:
+        if not os.path.exists(filename):
+            print("File ", filename, " does not exist")
+            continue
+        if os.path.isdir(filename):
+            print(filename, "is directory. Directories are not supported with this tool")
+            continue
         filenames += [filename]
+            
 
-applyCompare(filenames, additionalParams)
+    applyCompare(filenames, args.arch)

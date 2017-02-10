@@ -9,18 +9,7 @@ import tempfile
 import atexit
 from utilities.constants import *
 from utilities.functions import getExt, printError
-from utilities.compile import Compile, createProcess
-
-g_addArgs = {}
-
-def getArg(prog):
-    return "" if not prog in g_addArgs else g_addArgs[prog]
-
-def addArg(key, val):
-    if not key in g_addArgs:
-        g_addArgs[key] = ""
-    g_addArgs[key] += val + ' '
-
+from utilities.compile import *
 
 def checkIfIR(str):
     ext = os.path.splitext(str)[1]
@@ -28,17 +17,6 @@ def checkIfIR(str):
         msg = "Supported extensions: '.ll', '.bc'. Your extension: '%s'" % ext
         raise argparse.ArgumentTypeError(msg)
     return str
-
-def parseAdditionalArguments(str):
-    if str == "internalize":
-        addArg(g_link, "--" + str)
-        return ""
-    splitted= str.split(":")
-    if len(splitted) != 2:
-        print("Can't parse additional argument:", str)
-        return ""
-    addArg(splitted[0], splitted[1])
-    return ""
 
 def getFilesFromFolder(folder, extensions, isRec):
     assert os.path.isdir(folder), filename + "is not a folder"
@@ -77,7 +55,7 @@ def transformToBc(filenames, arch, tmpDir):
         comp = Compile(filename, arch)
         comp.outputFile = tmpDir + "/" + os.path.splitext(filename)[0] + ".ll"
         try:
-            comp.compile(getArg(comp.compileInfo.program))
+            comp.compile()
         except Exception as inst:
             printError(str(inst))
             continue
@@ -107,12 +85,11 @@ if __name__ == "__main__":
     parser.add_argument('--arch', nargs='?', choices=g_arches.keys(), default="",
                         help='Choose architecture. Native by default')
     parser.add_argument('--args', nargs='*', default="", type=parseAdditionalArguments,  help="Additional args in view like utility:'extra flags'")
-    parser.add_argument('-r', action='store_true', help='Search files in folders recursively. Currently unsupported')
+    parser.add_argument('-r', action='store_true', help='Search files in folders recursively')
     parser.add_argument('-o', metavar='filename', nargs=1, type=checkIfIR,
                         default='a.ll', help='Output file, \'a.ll\' by default')
 
     args = parser.parse_args()
-    print(g_addArgs)
     if len(args.filenames) == 1:
         print("Insufficient amount of filenames")
         sys.exit()
@@ -128,7 +105,5 @@ if __name__ == "__main__":
         filenames = transformToBc(filenames, args.arch, tmpDir)
         if len(filenames) > 1:
             errCode = llvmLink(filenames, args.o, "")
-            if errCode == 0:
-                print("Done")
     except Exception as e:
         printError(str(e))

@@ -25,7 +25,7 @@ class CompileInfo:
         self.ext = outputExt
 
 g_defaultClangOpts = "-emit-llvm -S -Oz"
-g_optCompileInfo = CompileInfo("opt", " -S -load " + g_loadOptimization + " " + g_optimization, ".ll")
+g_optCompileInfo = CompileInfo("opt", " -load " + g_loadOptimization + " " + g_optimization, ".ll")
 
 g_filenamesTo = {".cpp": CompileInfo("clang++", g_defaultClangOpts, ".ll"),
                  ".c": CompileInfo("clang", g_defaultClangOpts + " -fno-unwind-tables", ".ll"),
@@ -53,4 +53,3 @@ g_cgreen = '\33[32m'
 g_cred = '\33[31m'
 g_cend = '\33[0m'
 g_cyellow = '\33[33m'
-
