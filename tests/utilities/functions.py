@@ -20,6 +20,12 @@ def createOptCompile(filename):
     result.outputFile = os.path.splitext(filename)[0] + "_bbf.ll"
     return result
 
+def createLlvmLink(filenames, filenameOut,  opt=""):
+
+    g_llvmLinkCompileInfo = CompileInfo("llvm-link", opt, ".ll")
+    result = Compile(filename, "", g_llvmLinkCompileInfo)
+    result.outputFile = os.path.splitext(filename)[0] + "_bbf.ll"
+    return result
 
 def printError(value):
     print(g_cyellow + str(value) + g_cend)

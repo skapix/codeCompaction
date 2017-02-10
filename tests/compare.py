@@ -45,10 +45,7 @@ for i in range(1, len(sys.argv)):
     if not os.path.exists(filename):
         print("File ", filename, " does not exist")
         continue
-    if os.path.isdir(filename):
-        for f in glob.glob(filename + "/*.ll") + glob.glob(filename + "*.bc"):
-            filenames += [f]
-    else:
+    if not os.path.isdir(filename):
         filenames += [filename]
 
 applyCompare(filenames, additionalParams)
