@@ -45,21 +45,18 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden,
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
-// TODO: decide what to do with extra value of lifetime start/end intrinsic
+// TODO: ? decide what to do with extra value of lifetime start/end and
+// similar intrinsics, that create variables, but don't produce any code.
+// The main issue is that these variables are used as input/output arguments for
+// created functions
 // Possible solutions:
 // a) remove the entries, which are the part of our block [easier to implement]
 // b) don't factor out these instructions into new function [preferable]
 // TODO: ? place BB comparing in this file
 
-// 1) ? Elaborate Basic Block replacing.
-//   a) If identical basic blocks have 2 subsets of output arguments and
-// power of each of 2 subsets is large enough, create 2 different functions.
-// Try to expand this logic on N (where N >= 2) subsets.
-// Check, whether this assumption is more profitable in size compaction,
-// than creating just 1 function.
-//   b) Filter some subset of identical BBs, which has too many
-// output parameters. Now pass discards all basic block if at least
-// one BB has too many output parameters.
+// TODO: ? Elaborate function searching
+//   a) If suitable function exists, but arguments order is not the same,
+// try to permute bb's input/output arguments to be able to call the function.
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -326,18 +323,23 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
+// TODO: ? skip GetElementPtrInst with x86 arch
 /// Calculates Weight of basic block \p BB for further decisions
 static size_t getBBWeight(const BasicBlock *BB) {
   auto It = getBeginIt(BB), EIt = getEndIt(BB);
   // approximate amount of instructions for the backend
   // assume general case, sizes of all instructions are equal
-  size_t Points = 0;
 
+  size_t Points = 0;
+  size_t StoresAndLoads = 0;
   for (; It != EIt; ++It) {
-    // skip instructions, that don't produce any code
-    if (isa<BitCastInst>(It)) // TODO: add zext, icmp, ...
-      // because they can be omitted by code generator
+    // skip instructions, that can produce no code
+    if (isa<BitCastInst>(It) ||  isa<ICmpInst>(It))
       continue;
+    if (isa<LoadInst>(It) || isa<StoreInst>(It)) {
+      ++StoresAndLoads;
+      continue;
+    }
     if (const IntrinsicInst *Intr = dyn_cast<IntrinsicInst>(It)) {
       using Intrinsic::ID;
       static const std::set<Intrinsic::ID> NoCodeProduction = {
@@ -364,7 +366,7 @@ static size_t getBBWeight(const BasicBlock *BB) {
 
     ++Points;
   }
-  return Points;
+  return Points + StoresAndLoads/2 + StoresAndLoads %2;
 }
 
 /// Decides, whether it is profitable to factor out without creating
@@ -510,9 +512,8 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   else
     Builder.CreateRetVoid();
 
-  DEBUG(dbgs() << "Function created:");
+  debugPrint(BB, "Function created");
   DEBUG(F->print(dbgs()));
-  DEBUG(dbgs() << '\n');
 
   ++FunctionCounter;
   return F;
@@ -762,8 +763,7 @@ static BBInfo *tryFindFuncAndReplace(SmallVectorImpl<BBInfoRef> &BBInfos) {
   }
 
   // erase function from the list, in order not to modify it
-  std::swap(BBInfos[Id],
-            BBInfos.back()); // TODO: check function to swap references
+  std::swap(BBInfos[Id], BBInfos.back());
   Function *F = BBInfos.back().get().BB->getParent();
   BBInfo *Result = &BBInfos.back().get();
   BBInfos.pop_back();
