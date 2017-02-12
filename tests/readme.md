@@ -1,10 +1,16 @@
-Make sure, thar you set the right pass for bbfactoring library in utilities/constants.py (variable g_loadOptimization)
+Before running tests or any utility, make sure, that the path for bbfactoring library is set correctly in utilities/constants.py (variable g_loadOptimization)
 
-tests.py ~ simple tests, that check whether blocks were factored
+####tests.py
+Simple tests, that check whether blocks were factored
 Run: ./tests.py
 
-compare.py ~ auxiliary utility for comparing sizes of factored and non-factored object files for arm and x64 architecture
+####compare.py
+Auxiliary utility for comparing sizes of factored and non-factored object files for arm and x64 architecture
 Executable creates factored file, assembler files and object files for both: factored and non-factored programm for each architecture
-Run: ./compare.py [-c] filenameOrDir1 [filenameOrDir2 ...]
+Run help: ./compare.py -h
 
-utilites directory contains non-runnable shared python files
+####merge.py
+Tool uses llvm-link to merge source files into solo file. Accepts not only .bb and .ll files, but also higher level (like .c, .cpp)
+
+####utilities
+Directory contains shared python files
