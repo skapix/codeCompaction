@@ -1,15 +1,9 @@
-; ModuleID = 'main.cpp'
-source_filename = "main.cpp"
-target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-unknown-linux-gnu"
-
 $_ZSt4sqrtIiEN9__gnu_cxx11__enable_ifIXsr12__is_integerIT_EE7__valueEdE6__typeES2_ = comdat any
 
 @.str = private unnamed_addr constant [3 x i8] c"%d\00", align 1
 @.str.1 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
-; Function Attrs: uwtable
-define i32 @_Z5func1i(i32 %i) #0 {
+define i32 @_Z5func1i(i32 %i) {
 entry:
   %i.addr = alloca i32, align 4
   %l = alloca i32, align 4
@@ -52,8 +46,7 @@ if.end:                                           ; preds = %if.else, %if.then
   ret i32 %10
 }
 
-; Function Attrs: inlinehint nounwind uwtable
-define linkonce_odr double @_ZSt4sqrtIiEN9__gnu_cxx11__enable_ifIXsr12__is_integerIT_EE7__valueEdE6__typeES2_(i32 %__x) #1 comdat {
+define linkonce_odr double @_ZSt4sqrtIiEN9__gnu_cxx11__enable_ifIXsr12__is_integerIT_EE7__valueEdE6__typeES2_(i32 %__x) {
 entry:
   %__x.addr = alloca i32, align 4
   store i32 %__x, i32* %__x.addr, align 4
@@ -63,8 +56,7 @@ entry:
   ret double %call
 }
 
-; Function Attrs: uwtable
-define i32 @_Z5func2i(i32 %i) #0 {
+define i32 @_Z5func2i(i32 %i) {
 entry:
   %i.addr = alloca i32, align 4
   %l = alloca i32, align 4
@@ -107,8 +99,7 @@ if.end:                                           ; preds = %if.else, %if.then
   ret i32 %10
 }
 
-; Function Attrs: norecurse uwtable
-define i32 @main() #2 {
+define i32 @main() {
 entry:
   %retval = alloca i32, align 4
   %param = alloca i32, align 4
@@ -129,20 +120,8 @@ entry:
   ret i32 0
 }
 
-declare i32 @scanf(i8*, ...) #3
+declare i32 @scanf(i8*, ...)
 
-declare i32 @printf(i8*, ...) #3
+declare i32 @printf(i8*, ...)
 
-; Function Attrs: nounwind readnone
-declare double @sqrt(double) #4
-
-attributes #0 = { uwtable "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
-attributes #1 = { inlinehint nounwind uwtable "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
-attributes #2 = { norecurse uwtable "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
-attributes #3 = { "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
-attributes #4 = { nounwind readnone "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+fxsr,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
-attributes #5 = { nounwind readnone }
-
-!llvm.ident = !{!0}
-
-!0 = !{!"clang version 4.0.0 (trunk 285500)"}
+declare double @sqrt(double)
