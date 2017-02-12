@@ -63,7 +63,7 @@ def transformToBc(filenames, arch, tmpDir):
 
     return result
 
-def llvmLink(filenames, outputFile, addArgs):
+def llvmLink(filenames, outputFile):
     filenameQuery = " ".join(x for x in filenames)
     addReadability = " -S" if getExt(outputFile) == ".ll" else ""
     addArgs = getArg(g_link)
@@ -86,24 +86,26 @@ if __name__ == "__main__":
                         help='Choose architecture. Native by default')
     parser.add_argument('--args', nargs='*', default="", type=parseAdditionalArguments,  help="Additional args in view like utility:'extra flags'")
     parser.add_argument('-r', action='store_true', help='Search files in folders recursively')
-    parser.add_argument('-o', metavar='filename', nargs=1, type=checkIfIR,
+    parser.add_argument('-o', metavar='filename', type=checkIfIR,
                         default='a.ll', help='Output file, \'a.ll\' by default')
 
     args = parser.parse_args()
-    if len(args.filenames) == 1:
-        print("Insufficient amount of filenames")
-        sys.exit()
-
     #start processing filenames
 
     filenames = getFiles(args.filenames, args.ext, args.r)
     # filter duplicate filenames
     filenames = list(set(filenames))
 
+    if len(filenames) <= 1:
+        print("Insufficient amount of filenames")
+        sys.exit()
+
     tmpDir = createTmp()
     try:
         filenames = transformToBc(filenames, args.arch, tmpDir)
         if len(filenames) > 1:
-            errCode = llvmLink(filenames, args.o, "")
+            errCode = llvmLink(filenames, args.o)
+        else:
+            printError("Not enough filenames to merge")
     except Exception as e:
         printError(str(e))
