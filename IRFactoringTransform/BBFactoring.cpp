@@ -68,7 +68,7 @@ class BBNode {
 public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
   BBNode(BasicBlock *BB)
-      : BB(BB), Hash(BBComparator::basicBlockHash(*BB, false)) {}
+      : BB(BB), Hash(BBComparator::basicBlockHash(*BB, false, false)) {}
 
   BBNode(BasicBlock *BB, const BBComparator::BasicBlockHash Hash)
       : BB(BB), Hash(Hash) {}
@@ -133,14 +133,14 @@ bool BBFactoring::runOnModule(Module &M) {
   for (auto &F : M.functions()) {
     if (!F.isDeclaration() && !F.hasAvailableExternallyLinkage()) {
       for (auto &BB : F.getBasicBlockList())
-        HashedBBs.push_back({BBComparator::basicBlockHash(BB, false), &BB});
+        HashedBBs.push_back({BBComparator::basicBlockHash(BB, false, false), &BB});
     }
   }
 
   std::vector<std::vector<BasicBlock *>> IdenticalBlocksContainer;
   auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
-  // merge
+  // merge hashed values into map
   for (auto It = HashedBBs.begin(), Ite = HashedBBs.end(); It != Ite; ++It) {
     auto InsertedBBNode = BBTree.insert(std::make_pair(
         BBNode(It->second, It->first), IdenticalBlocksContainer.size()));

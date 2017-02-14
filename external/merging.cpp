@@ -36,6 +36,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mergefunc"
 
+
 int BBComparator::cmpNumbers(uint64_t L, uint64_t R) const {
   if (L < R) return -1;
   if (L > R) return 1;
@@ -792,26 +793,27 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
 int BBComparator::cmpInstOperands(const Instruction *InstL, const Instruction *InstR) const {
   assert(InstL->getNumOperands() == InstR->getNumOperands());
 
-  if (InstL->isCommutative()) {
-    // op(x1,y1); op(x2,y2)
-    assert(InstL->isCommutative() == InstR->isCommutative());
-    assert(InstL->getNumOperands() == 2);
-    if (!cmpValues(InstL->getOperand(0), InstR->getOperand(1)) &&
-        !cmpValues(InstL->getOperand(1), InstR->getOperand(0)))
-      return 0;
-  }
-  // If !(x1 == y2 && y1 == x2) then make usual check
-
+  int Res = 0;
   for (unsigned i = 0, e = InstL->getNumOperands(); i != e; ++i) {
     Value *OpL = InstL->getOperand(i);
     Value *OpR = InstR->getOperand(i);
-    if (int Res = cmpValues(OpL, OpR))
-      return Res;
+    if ((Res = cmpValues(OpL, OpR)))
+      break;
     // cmpValues should ensure this is true.
     assert(cmpTypes(OpL->getType(), OpR->getType()) == 0);
   }
+  if (Res == 0 || !InstL->isCommutative())
+    return Res;
 
-  return 0;
+  // op(x1,y1); op(x2,y2)
+  assert(InstL->isCommutative() == InstR->isCommutative());
+  assert(InstL->getNumOperands() == 2);
+  if (!cmpValues(InstL->getOperand(0), InstR->getOperand(1)) &&
+      !cmpValues(InstL->getOperand(1), InstR->getOperand(0)))
+    return 0;
+
+  return Res;
+
 }
 
 namespace {
@@ -846,10 +848,18 @@ public:
 // when possibly merging functions which are the same modulo constants and call
 // targets.
 BBComparator::BasicBlockHash BBComparator::basicBlockHash(BasicBlock &BB,
+                                                          const bool calculatePhiNodes,
                                                           const bool calculateTerminatorInstruction) {
   HashAccumulator64 H;
   auto IE =  std::prev(BB.end());
-  for (auto I = BB.begin();  I != IE; ++I) {
+  auto I = BB.begin();
+  if (calculatePhiNodes) {
+    for (; isa<PHINode>(I); ++I) {
+      H.add(I->getOpcode());
+    }
+  }
+
+  for (;  I != IE; ++I) {
     H.add(I->getOpcode());
   }
 
@@ -866,7 +876,7 @@ BBComparator::BasicBlockHash BBComparator::basicBlockHash(BasicBlock &BB,
 int BBComparator::compare() {
   sn_mapL.clear();
   sn_mapR.clear();
-  const AttributeSet unnecessaryAttributes = AttributeSet().
+  static const AttributeSet unnecessaryAttributes = AttributeSet().
       addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::ReadOnly).
       addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::WriteOnly).
       addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::JumpTable).
