@@ -1,3 +1,5 @@
+@.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
+
 %struct.S = type { i32, i8, %struct.S* }
 
 define i32 @foo(i32 %i) {
@@ -10,8 +12,7 @@ entry:
   store i32 %add, i32* %k, align 8
   %c = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 1
   store i8 73, i8* %c, align 8
-  %cmp = icmp eq i32 %i, 0
-  br i1 %cmp, label %cleanup, label %if.end
+  br label %if.end
 
 if.end:
   %pS = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 2
@@ -21,8 +22,7 @@ if.end:
   br label %cleanup
 
 cleanup:
-  %retval.0 = phi i32 [ 2, %entry ], [ %.call, %if.end ]
-  ret i32 %retval.0
+  ret i32 %.call
 }
 
 define i32 @bar(i32 %i) {
@@ -35,8 +35,7 @@ entry:
   store i32 %add, i32* %k, align 8
   %c = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 1
   store i8 73, i8* %c, align 8
-  %cmp = icmp eq i32 %i, 0
-  br i1 %cmp, label %cleanup, label %if.end
+  br label %if.end
 
 if.end:
   %pS = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 2
@@ -46,6 +45,15 @@ if.end:
   br label %cleanup
 
 cleanup:
-  %retval.0 = phi i32 [ 3, %entry ], [ %.call, %if.end ]
-  ret i32 %retval.0
+  ret i32 %.call
 }
+
+define i32 @main() {
+  %call1 = call i32 @foo(i32 3)
+  %call2 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call1)
+  %call3 = call i32 @bar(i32 4)
+  %call4 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call3)
+  ret i32 0
+}
+
+declare i32 @printf(i8*, ...)

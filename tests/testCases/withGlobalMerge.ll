@@ -1,3 +1,4 @@
+@.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 @g_globalValue = local_unnamed_addr global i32 0, align 4
 
 define i32 @foo(i32 %i) {
@@ -36,3 +37,13 @@ if.end:
   store i32 %inc, i32* @g_globalValue, align 4
   ret i32 %inc
 }
+
+define i32 @main() {
+  %call1 = call i32 @foo(i32 3)
+  %call2 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call1)
+  %call3 = call i32 @bar(i32 4)
+  %call4 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call3)
+  ret i32 0
+}
+
+declare i32 @printf(i8*, ...)
