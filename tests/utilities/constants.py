@@ -6,6 +6,7 @@ g_optimization = "-bbfactor"
 g_loadOptimization = os.path.dirname(os.path.abspath(__file__)) + "/../../build/libIRFactoringTransform.so"
 
 g_opt = "opt"
+g_lli = "lli"
 g_link = "llvm-link"
 
 g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
