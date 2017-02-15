@@ -1,33 +1,38 @@
 @g_globalValue = local_unnamed_addr global i32 0, align 4
 
-define i32 @_Z2f0d(double %k) {
+define i32 @foo(i32 %i) {
 entry:
-  tail call void @_Z16someCalculationsdi(double %k, i32 0) #2
-  tail call void @_Z16someCalculationsdi(double %k, i32 1) #2
+  %someCalc1 = mul nsw i32 %i, %i
+  %someCalc2 = mul nsw i32 %i, %someCalc1
+  %someCalc3 = add nsw i32 %someCalc2, %someCalc1
+  %someCalc4 = sub nsw i32 %someCalc3, %someCalc1
+  %someCalc5 = mul nsw i32 %someCalc3, %someCalc4
   %0 = load i32, i32* @g_globalValue, align 4
-  %inc = add nsw i32 %0, 1
+  %inc = add nsw i32 %0, %someCalc5
   store i32 %inc, i32* @g_globalValue, align 4
   ret i32 %inc
 }
 
-declare void @_Z16someCalculationsdi(double, i32)
 
-define i32 @_Z2f1d(double %k) {
+define i32 @bar(i32 %i) {
 entry:
-  %cmp = fcmp olt double %k, 0.000000e+00
+  %cmp = icmp slt i32 %i, 0
   br i1 %cmp, label %if.then, label %if.end
 
-if.then:                                          ; preds = %entry
-  %sub = fsub double -0.000000e+00, %k
+if.then:
   %0 = load i32, i32* @g_globalValue, align 4
-  tail call void @_Z16someCalculationsdi(double %sub, i32 %0) #2
+  %inc0 = add nsw i32 %0, 1
+  store i32 %inc0, i32* @g_globalValue, align 4
   br label %if.end
 
-if.end:                                           ; preds = %if.then, %entry
-  tail call void @_Z16someCalculationsdi(double %k, i32 0) #2
-  tail call void @_Z16someCalculationsdi(double %k, i32 1) #2
+if.end: 
+  %someCalc1 = mul nsw i32 %i, %i
+  %someCalc2 = mul nsw i32 %i, %someCalc1
+  %someCalc3 = add nsw i32 %someCalc2, %someCalc1
+  %someCalc4 = sub nsw i32 %someCalc3, %someCalc1
+  %someCalc5 = mul nsw i32 %someCalc3, %someCalc4
   %1 = load i32, i32* @g_globalValue, align 4
-  %inc = add nsw i32 %1, 1
+  %inc = add nsw i32 %1, %someCalc5
   store i32 %inc, i32* @g_globalValue, align 4
   ret i32 %inc
 }

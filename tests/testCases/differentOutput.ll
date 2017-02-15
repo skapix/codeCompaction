@@ -1,44 +1,38 @@
-define i32 @"\01?foo@@YAHH@Z"(i32 %k) {
+define i32 @foo(i32 %k) {
 entry:
-  %call = tail call i32 @"\01?someCalc@@YAHH@Z"(i32 %k)
-  %conv = trunc i32 %call to i8
-  %call1 = tail call i32 @"\01?someCalc@@YAHHD@Z"(i32 %k, i8 %conv)
-  %conv2 = trunc i32 %call1 to i8
-  %call3 = tail call i32 @"\01?someCalc@@YAHHD@Z"(i32 %call, i8 %conv2)
-  %cmp = icmp eq i32 %call, 0
+  %someCalc1 = add nsw i32 %k, 31
+  %someCalc2 = mul nsw i32 %someCalc1, 5
+  %someCalc3 = add nsw i32 %someCalc1, %someCalc2
+  %someCalc4 = add nsw i32 %someCalc3, %someCalc3
+  %cmp = icmp eq i32 %someCalc4, 10
   br i1 %cmp, label %cleanup, label %if.end
 
-if.end:                                           ; preds = %entry
-  %cmp4 = icmp eq i32 %call3, 2
+if.end:
+  %cmp4 = icmp eq i32 %someCalc3, 2
   %mul = mul nsw i32 %k, 3
-  %mul.call3 = select i1 %cmp4, i32 %mul, i32 %call3
-  ret i32 %mul.call3
+  %res = select i1 %cmp4, i32 %mul, i32 %someCalc3
+  ret i32 %res
 
-cleanup:                                          ; preds = %entry
+cleanup:
   ret i32 %k
 }
 
-declare i32 @"\01?someCalc@@YAHH@Z"(i32)
-
-declare i32 @"\01?someCalc@@YAHHD@Z"(i32, i8)
-
-define i32 @"\01?almostFoo@@YAHH@Z"(i32 %k) local_unnamed_addr #0 {
+define i32 @almostFoo(i32 %k) {
 entry:
-  %call = tail call i32 @"\01?someCalc@@YAHH@Z"(i32 %k)
-  %conv = trunc i32 %call to i8
-  %call1 = tail call i32 @"\01?someCalc@@YAHHD@Z"(i32 %k, i8 %conv)
-  %conv2 = trunc i32 %call1 to i8
-  %call3 = tail call i32 @"\01?someCalc@@YAHHD@Z"(i32 %call, i8 %conv2)
-  %cmp = icmp eq i32 %call, 0
+  %someCalc1 = add nsw i32 %k, 31
+  %someCalc2 = mul nsw i32 %someCalc1, 5
+  %someCalc3 = add nsw i32 %someCalc1, %someCalc2
+  %someCalc4 = add nsw i32 %someCalc3, %someCalc3
+  %cmp = icmp eq i32 %someCalc4, 10
   br i1 %cmp, label %cleanup, label %if.end
 
-if.end:                                           ; preds = %entry
-  %cmp4 = icmp eq i32 %call3, 2
-  %mul = mul nsw i32 %k, 3
-  %mul.call = select i1 %cmp4, i32 %mul, i32 %call
-  ret i32 %mul.call
+if.end:
+  %cmp4 = icmp eq i32 %someCalc3, 3
+  %mul = mul nsw i32 %k, 10
+  %res = select i1 %cmp4, i32 %mul, i32 %someCalc3
+  ret i32 %res
 
-cleanup:                                          ; preds = %entry
-  ret i32 %call1
+cleanup:
+  ret i32 %someCalc2
 }
 
