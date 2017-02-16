@@ -221,12 +221,12 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
   return Result;
 }
 
-/// This function is like isInstUsedOutsideOfBB, but doesn't
-/// consider Phi nodes as a special case, It also deals with TerminatorInst's
-/// and PhiNodes like instructions in other block because
+/// This function is like isInstUsedOutsideOfBB, but does
+/// consider Phi nodes and TerminatorInsts as a special case, because
 /// they are not part of the created function.
-/// \return if the value \p V is used outside the function, created from \p BB
-static bool isValUsedOutsideOfBB(const Value *V, const BasicBlock *BB) {
+/// \return if the value \p V is used outside it's parent function
+static bool isInstUsedOutsideParent(const Instruction *V) {
+  const BasicBlock *BB = V->getParent();
   for (const Use &U : V->uses()) {
     const Instruction *I = cast<Instruction>(U.getUser());
     if (I->getParent() != BB || isa<TerminatorInst>(I) || isa<PHINode>(I))
@@ -245,7 +245,7 @@ static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
   auto IE = getEndIt(BB);
 
   for (; I != IE; ++I, ++Current) {
-    if (isValUsedOutsideOfBB(&*I, BB)) {
+    if (isInstUsedOutsideParent(&*I)) {
       Result.push_back(Current);
     }
   }
@@ -254,9 +254,9 @@ static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
 
 /// Converts instruction numbers of \p BB
 /// into Values * \p NumsInstr
-static SmallVector<Value *, 8> convertOutput(BasicBlock *BB,
+static SmallVector<Instruction *, 8> convertOutput(BasicBlock *BB,
                                              const ArrayRef<size_t> NumsInstr) {
-  SmallVector<Value *, 8> Result;
+  SmallVector<Instruction *, 8> Result;
   Result.reserve(NumsInstr.size());
   if (NumsInstr.empty())
     return Result;
@@ -270,42 +270,74 @@ static SmallVector<Value *, 8> convertOutput(BasicBlock *BB,
   return Result;
 }
 
-// The way of representing output parameters of basic blocks
-// Indicies of BB's instructions
-using BBOutputIds = SmallVector<size_t, 8>;
-using BBOutputIdsRef = std::reference_wrapper<const BBOutputIds>;
-using BBOutputStorage = std::set<BBOutputIds>;
+
+// The way of representing output and skipped instructions of basic blocks
+using BBInstIds = SmallVector<size_t, 8>;
+
+namespace {
+
+struct BBsCommonInfo {
+  size_t Weight;
+  BBInstIds OutputIds;
+  // TODO: skip some instructions from factoring out
+  BBInstIds SkippedInsts;
+
+  void mergeOutput(const BBInstIds& Ids);
+
+};
+
+} // end anonymous namespace
+
+void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
+  assert(std::is_sorted(Ids.begin(), Ids.end()) &&
+         "Output values must be sorted into ascending order");
+  auto IdsIt = Ids.begin(), IdsEIt = Ids.end();
+  for (auto It = OutputIds.begin(), EIt = OutputIds.end();
+       It != EIt && IdsIt != IdsEIt; ++It) {
+    size_t This = *It;
+    size_t Other = *IdsIt;
+
+    if (Other == This) {
+      ++IdsIt;
+    }
+    else if (Other < This) {
+      It = OutputIds.insert(It, Other); // It points to *IdsIt
+      ++IdsIt;
+    }
+    // else (Other > This) continue;
+
+  }
+  if (IdsIt != IdsEIt)
+    OutputIds.insert(OutputIds.end(), IdsIt, IdsEIt);
+}
 
 namespace {
 
 /// Structure, that keeps all important information about basic blocks,
 /// that are going to be factor out
 struct BBInfo {
-  BBInfo(BasicBlock *BB, BBOutputStorage &OutputStorage)
-      : BB(BB), Inputs(getInput(BB)),
-        OutputsIds(*OutputStorage.emplace(getOutput(BB)).first),
-        Outputs(convertOutput(BB, OutputsIds.get())) {}
+  BBInfo(BasicBlock *BB)
+      : BB(BB), Inputs(getInput(BB))
+  {}
 
   BasicBlock *BB;
   SmallVector<Value *, 8> Inputs;
-  BBOutputIdsRef OutputsIds;
-  SmallVector<Value *, 8> Outputs;
 
+  SmallVector<Instruction *, 8> Outputs;
   Value *ReturnVal = nullptr;
 
-  void setReturnValue(const size_t InstNumInBB) {
+  void extractReturnValue(const size_t ResultId) {
     assert(ReturnVal == nullptr && "Return value should be set once");
-    size_t Index =
-        find(OutputsIds.get(), InstNumInBB) - OutputsIds.get().begin();
-    ReturnVal = Outputs[Index];
-    Outputs.erase(Outputs.begin() + Index);
+    assert(ResultId != Outputs.size() && "Should be index of Outputs");
+
+    std::swap(Outputs[ResultId], Outputs.back());
+    ReturnVal = Outputs.back();
+    Outputs.pop_back();
   }
 };
 
 } // end anonymous namespace
 
-using BBInfoRef = std::reference_wrapper<BBInfo>;
-using BBEqualInfoOutput = SmallVector<BBInfoRef, 8>;
 
 /// \return whether \p BB is able to throw
 static bool canThrow(const BasicBlock *BB) {
@@ -378,9 +410,10 @@ static size_t getBBWeight(const BasicBlock *BB) {
 /// \return true if profitable
 static bool isProfitableReplacement(const size_t Weight, const size_t InputArgs,
                                     const size_t OutputArgs) {
+  const size_t AllocaOutputs = OutputArgs < 1 ? 0 : OutputArgs - 1;
   if (ForceMerge)
     return true;
-  size_t CallCost = 1 + 2 * OutputArgs + InputArgs;
+  size_t CallCost = 1 + 2 * AllocaOutputs + InputArgs;
   return Weight > CallCost;
 }
 
@@ -567,13 +600,13 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   auto AllocaIt = Args.begin() + Input.size();
   for (auto It = Output.begin(), EIt = Output.end(); It != EIt;
        ++It, ++AllocaIt) {
-    Value *CurrentValue = *It;
-    if (!isValUsedOutsideOfBB(CurrentValue, BB))
+    Instruction *CurrentInst = *It;
+    if (!isInstUsedOutsideParent(CurrentInst))
       continue;
 
     LastBBInst = Builder.CreateLoad(*AllocaIt);
-    auto BitCasted = GetValueForArgs(LastBBInst, CurrentValue->getType());
-    CurrentValue->replaceAllUsesWith(BitCasted);
+    auto BitCasted = GetValueForArgs(LastBBInst, CurrentInst->getType());
+    CurrentInst->replaceAllUsesWith(BitCasted);
   }
 
   // 5) perform cleanup from the end because in opposite llvm will
@@ -586,94 +619,50 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   return true;
 }
 
-/// Merges set of sorted vectors into sorted vector of unique values
-/// All values of this map are unused, use this map as set of output values
-/// Example. combineOutputs : {{1, 2, 3}, {1, 2}, {1, 6}} => {1, 2, 3, 6}
-static BBOutputIds combineOutputs(const BBOutputStorage &Outputs) {
-
-  if (Outputs.size() == 1) {
-    return *Outputs.begin();
-  }
-
-  BBOutputIds Result;
-  if (Outputs.size() == 0) {
-    return Result;
-  }
-
-  // ItCurrentEnd::first points to the least element, that is
-  // still not in the resultant set
-  // ItCurrentEnd::second always points to the last element
-  // used as a right border
-  using ItCurrentEnd =
-      std::pair<BBOutputIds::const_iterator, const BBOutputIds::const_iterator>;
-  // vector of iterator pair, that steps from begin to end
-  SmallVector<ItCurrentEnd, 8> Its;
-  Its.reserve(Outputs.size());
-  for (auto &Output : Outputs) {
-    if (!Output.empty())
-      Its.push_back(std::make_pair(Output.begin(), Output.end()));
-  }
-
-  // Algorithm finds min element A through all iterators
-  // and pushes it in the resultant set.
-  // Then it increments all iterators, that point to A and repeat steps,
-  // untill all iterators reached theirs right border.
-  size_t CurMin = std::numeric_limits<size_t>::max();
-  while (true) {
-    size_t NextMin = std::numeric_limits<size_t>::max();
-    bool Done = true;
-    for (auto &It : Its) {
-      if (*It.first == CurMin)
-        ++It.first;
-      if (It.first == It.second)
-        continue;
-
-      if (*It.first < NextMin) {
-        NextMin = *It.first;
-        Done = false;
-      }
-    } // for
-    if (Done)
-      break;
-    Result.push_back(NextMin);
-    CurMin = NextMin;
-  }
-
-  return Result;
-}
-
 /// Select a function return value from array of operands
-static size_t getFunctionRetValId(const ArrayRef<Value *> Outputs) {
-  return find_if(Outputs.rbegin(), Outputs.rend(),
-                 [](Value *V) { return V->getType()->isFirstClassType(); }) -
-         Outputs.rbegin();
+static size_t getFunctionRetValId(const ArrayRef<Instruction *> Outputs) {
+  for (auto It = Outputs.rbegin(), EIt = Outputs.rend(); It != EIt; ++It) {
+    Value *V = *It;
+    if (V->getType()->isFirstClassType()) {
+      Instruction * I = cast<Instruction>(V);
+      if (!llvm::isa<AllocaInst>(I))
+        return It - Outputs.rbegin();
+    }
+  }
+  return Outputs.size();
 }
 
 /// \param F - possible function to be merged with args \p Inputs, \p Outputs
 /// \returns true, if the Function F, that consists of 1 basic block can be used
 /// as a callee of other basic blocks
-static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
-                         const ArrayRef<Value *> Outputs) {
+static bool hasRightOrder(const BBInfo &Info) {
+  const Function *F = Info.BB->getParent();
+  const SmallVectorImpl<Value *> &Inputs = Info.Inputs;
+  const SmallVectorImpl<Instruction *> &Outputs = Info.Outputs;
+
   assert(F->size() == 1);
   if (F->isVarArg())
     return false;
   assert(!isa<PHINode>(F->front().front()) &&
          "Functions with solo basic block can't contain any phi nodes");
 
+  bool BBNotVoid = Info.ReturnVal != nullptr;
   bool NotVoid = F->getReturnType() != Type::getVoidTy(F->getContext());
-  if (Inputs.size() + Outputs.size() < F->arg_size() + NotVoid) {
+
+  if (BBNotVoid != NotVoid) {
+    return false;
+  }
+
+  if (Inputs.size() + Outputs.size() < F->arg_size()) {
     // don't use functions with unused arguments
     return false;
   }
-  assert(Inputs.size() + Outputs.size() == F->arg_size() + NotVoid);
+  assert(Inputs.size() + Outputs.size() == F->arg_size());
 
   Value *ReturnVal = nullptr;
   if (NotVoid) {
     ReturnVal = cast<ReturnInst>(F->front().back()).getReturnValue();
-    size_t OutputId = getFunctionRetValId(Outputs);
-    assert(OutputId < Outputs.size() && "Wrong outputs identification");
-    Value *OurRetVal = Outputs[OutputId];
-    if (OurRetVal != ReturnVal)
+    if (Info.ReturnVal != ReturnVal)
       return false;
   }
 
@@ -686,24 +675,30 @@ static bool isRightOrder(const Function *F, const ArrayRef<Value *> Inputs,
   for (auto Output : Outputs) {
     if (Output == ReturnVal)
       continue;
-    if (&*It++ != Output)
+    if (static_cast<const Value *>(&*It++) != Output)
       return false;
   }
 
   return true;
 }
 
-/// \param Infos [in, out] set return value, found in Model into infos
-static void prepareForBBMerging(SmallVectorImpl<BBInfoRef> &Infos) {
+/// \param CommonInfo used for setting \p Infos output and return values
+/// \param Infos [in, out] set Outputs and return value, found in Model into \p Infos
+static void prepareForBBMerging(const BBsCommonInfo &CommonInfo, SmallVectorImpl<BBInfo> &Infos) {
+
+  for (BBInfo &Info : Infos) {
+    Info.Outputs = convertOutput(Info.BB, CommonInfo.OutputIds);
+  }
+
   const BBInfo &Model = Infos.front();
   size_t ReturnIdF = getFunctionRetValId(Model.Outputs);
   if (ReturnIdF == Model.Outputs.size()) {
     // return type void ~ nullptr
     return;
   }
-  ReturnIdF = Model.OutputsIds.get()[ReturnIdF];
+
   for (BBInfo &Info : Infos) {
-    Info.setReturnValue(ReturnIdF);
+    Info.extractReturnValue(ReturnIdF);
   }
 }
 
@@ -711,74 +706,17 @@ static void prepareForBBMerging(SmallVectorImpl<BBInfoRef> &Infos) {
 /// \param BBs basic blocks, which parents are observed
 /// \return basic block, which function is suitable for merging
 /// or size of \p BBs if function was not found
-static size_t findAppropriateFunctionId(const ArrayRef<BBInfoRef> BBs) {
+static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs) {
   size_t i = 0;
   for (size_t ei = BBs.size(); i < ei; ++i) {
-    const Function *F = BBs[i].get().BB->getParent();
+    const Function *F = BBs[i].BB->getParent();
     if (F->size() == 1) {
       // check the order of passed arguments
-      if (isRightOrder(F, BBs[i].get().Inputs, BBs[i].get().Outputs))
+      if (hasRightOrder(BBs[i]))
         return i;
     }
   }
   return i;
-}
-
-/// \param BBInfos array of all basic blocks
-/// \return Infos, grouped by equal output
-static SmallVector<BBEqualInfoOutput, 8>
-combineByOutputsIds(SmallVectorImpl<BBInfo> &BBInfos) {
-  std::deque<BBInfoRef> BBRefInfos(BBInfos.begin(),
-                                   BBInfos.end()); // list or deque
-  // Most likely all BBs have the same set of output args
-  SmallVector<BBEqualInfoOutput, 8> Result;
-  while (!BBRefInfos.empty()) {
-    Result.push_back(BBEqualInfoOutput());
-    const BBInfo &Current = BBRefInfos.front();
-    // remove all elements, which are equal to Current.OutputsIds
-    // from BBRefInfos and insert into Result
-    for (auto It = BBRefInfos.begin(); It != BBRefInfos.end();) {
-      if (It->get().OutputsIds.get() == Current.OutputsIds.get()) {
-        Result.back().push_back(*It);
-        It = BBRefInfos.erase(It);
-        continue;
-      }
-      ++It;
-    }
-  }
-  return Result;
-};
-
-static BBInfo *tryFindFuncAndReplace(SmallVectorImpl<BBInfoRef> &BBInfos) {
-  assert(BBInfos.size() >= 2 && "No sence in merging");
-
-  assert(std::find_if(BBInfos.begin() + 1, BBInfos.end(),
-                      [&BBInfos](const BBInfo &Info) {
-                        return &BBInfos[0].get().OutputsIds == &Info.OutputsIds;
-                      }) == BBInfos.end());
-
-  size_t Id = findAppropriateFunctionId(BBInfos);
-  if (Id == BBInfos.size()) {
-    return nullptr;
-  }
-
-  // erase function from the list, in order not to modify it
-  std::swap(BBInfos[Id], BBInfos.back());
-  Function *F = BBInfos.back().get().BB->getParent();
-  BBInfo *Result = &BBInfos.back().get();
-  BBInfos.pop_back();
-
-  prepareForBBMerging(BBInfos);
-
-  for (auto &Info : BBInfos) {
-    replaceBBWithFunctionCall(Info, F);
-  }
-
-  DEBUG(dbgs() << BBInfos.size()
-               << " basic blocks were replaced with existed function "
-               << F->getName() << "\n");
-
-  return Result;
 }
 
 /// Common steps of replacing equal basic blocks
@@ -803,20 +741,29 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     return false;
   }
 
-  size_t Weight = getBBWeight(BBs.front());
-  if (Weight <= 2) {
+  // Fill common basic blocks info
+
+  BBsCommonInfo CommonInfo;
+  CommonInfo.Weight = getBBWeight(BBs.front());
+
+  if (CommonInfo.Weight <= 2) {
     debugPrint(BBs.front(), "Block family is not worth merging");
     return false;
   }
 
-  bool Changed = false;
+  CommonInfo.OutputIds = getOutput(BBs.front());
+  std::for_each(BBs.begin()+1, BBs.end(),
+    [&CommonInfo](const BasicBlock *BB) { CommonInfo.mergeOutput(getOutput(BB)); });
 
-  BBOutputStorage OutputStorage;
+
   SmallVector<BBInfo, 8> BBInfos;
-  BBInfos.reserve(BBs.size());
-  std::transform(
-      BBs.begin(), BBs.end(), std::back_inserter(BBInfos),
-      [&OutputStorage](BasicBlock *BB) { return BBInfo(BB, OutputStorage); });
+  BBInfos.emplace_back(BBs.front());
+  if (!isProfitableReplacement(CommonInfo.Weight, BBInfos.front().Inputs.size(),
+               CommonInfo.OutputIds.size())) {
+    return false;
+  }
+  std::for_each(BBs.begin() + 1, BBs.end(),
+    [&BBInfos](BasicBlock *BB) { BBInfos.emplace_back(BB); });
 
   // Input Validation
   assert(std::equal(std::next(BBInfos.begin()), BBInfos.end(), BBInfos.begin(),
@@ -832,69 +779,43 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
                     }) &&
          "Input argument types of identity BBs must be equal");
 
-  SmallVector<BBEqualInfoOutput, 8> EqualOutputIds =
-      combineByOutputsIds(BBInfos);
+  // Try to find suitable function for merging
 
-  SmallVector<BBInfoRef, 8> Unmerged;
-  Unmerged.reserve(BBInfos.size());
-  for (auto &Outputs : EqualOutputIds) {
-    if (!isProfitableReplacement(Weight, Outputs.front().get().Inputs.size(),
-                                 Outputs.front().get().Outputs.size())) {
-      continue;
+  prepareForBBMerging(CommonInfo, BBInfos);
+
+  size_t Id = findAppropriateBBsId(BBInfos);
+  if (Id != BBInfos.size()) {
+    Function *F = BBInfos[Id].BB->getParent();
+
+    // remove BBInfos[Id] from replacing
+    std::swap(BBInfos[Id], BBInfos.back());
+    BBInfos.pop_back();
+
+    for (auto &Info : BBInfos) {
+      replaceBBWithFunctionCall(Info, F);
     }
 
-    if (Outputs.size() == 1) {
-      Unmerged.push_back(Outputs.front());
-      continue;
-    }
-    BBInfo *Info = tryFindFuncAndReplace(Outputs);
-    if (Info == nullptr) {
-      Unmerged.insert(Unmerged.end(), Outputs.begin(), Outputs.end());
-      continue;
-    }
-    Changed = true;
-    Unmerged.push_back(*Info);
-  }
-
-  if (Unmerged.size() <= 1)
-    return Changed;
-
-  // create common outputs and modify outputValues
-  {
-    const BBOutputIds &OutputsIds =
-        *OutputStorage.emplace(combineOutputs(OutputStorage)).first;
-    for (BBInfo &Info : Unmerged) {
-      // if their sizes are not equal => common output differs from Info's
-      // if was already replaces => meaningless to replace sth. there
-      //   because this value won't be used
-      if (OutputsIds.size() != Info.OutputsIds.get().size()) {
-        Info.OutputsIds = OutputsIds; // copies just pointer
-        Info.Outputs = convertOutput(Info.BB, OutputsIds);
-      }
-    }
-  }
-
-  // try again to replace, not creating function, but with common OutputsIds
-  if (tryFindFuncAndReplace(Unmerged) != nullptr)
+    DEBUG(dbgs() << BBInfos.size()
+                 << " basic blocks were replaced with existed function "
+                 << F->getName() << "\n");
     return true;
-
-  BBInfo &Model = Unmerged.front();
-
-  if (!shouldCreateFunction(Weight, Unmerged.size(), Model.Inputs.size(),
-                            Model.Outputs.size())) {
-    debugPrint(BBs.front(), "Unprofitable replacement");
-    return Changed;
   }
 
-  prepareForBBMerging(Unmerged);
 
-  Function *F = createFuncFromBB(Model);
+  if (!shouldCreateFunction(CommonInfo.Weight, BBInfos.size(), BBInfos.front().Inputs.size(),
+                            CommonInfo.OutputIds.size())) {
+    debugPrint(BBs.front(), "Unprofitable replacement");
+    return false;
+  }
 
-  for (auto &Info : Unmerged) {
+
+  Function *F = createFuncFromBB(BBInfos.front());
+
+  for (auto &Info : BBInfos) {
     replaceBBWithFunctionCall(Info, F);
   }
 
-  DEBUG(dbgs() << Unmerged.size()
+  DEBUG(dbgs() << BBInfos.size()
                << " basic blocks were replaced with just created function "
                << F->getName() << "\n");
 
