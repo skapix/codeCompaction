@@ -195,15 +195,59 @@ static void debugPrint(const BasicBlock *BB, const StringRef Str) {
                << ". Function: " << BB->getParent()->getName() << '\n');
 }
 
+// The way of representing output and skipped instructions of basic blocks
+using BBInstIds = SmallVector<size_t, 8>;
+
+/// Class is used for smart searching of skipped instructions
+/// Class is useful when we need to traverse [getBeginIt, getEndIt) basic block.
+class BBSkippedIds
+{
+public:
+  void checkBegin() const { assert(Cur == SkippedIds.begin() &&
+                                "Cur should point to the beginning of the array"); }
+  void push_back(const size_t InstId) {
+    assert((SkippedIds.empty() || SkippedIds.back() < InstId) &&
+             "SkippedIds should be sorted");
+    SkippedIds.push_back(InstId);
+  }
+
+  void resetIt() const {
+    Cur = SkippedIds.begin();
+  }
+  const BBInstIds &get() const { return SkippedIds;}
+
+  /// \param InstId number of instruction
+  /// \return true if \p InstId is number of instruction
+  /// should be skipped from factoring out
+  bool contains(size_t InstId) const;
+
+private:
+  /// Ascendingly sorted vector of instruction numbers
+  BBInstIds SkippedIds;
+  mutable BBInstIds::const_iterator Cur;
+};
+
+bool BBSkippedIds::contains(size_t InstId) const {
+  if (Cur == SkippedIds.end()) // no skipped elements
+    return false;
+  if (*Cur != InstId)
+    return false;
+  Cur = (Cur == std::prev(SkippedIds.end())) ? SkippedIds.begin() : Cur + 1;
+  return true;
+}
+
 /// \return Values, that were created outside of the factored \p BB
-static SmallVector<Value *, 8> getInput(BasicBlock *BB) {
+static SmallVector<Value *, 8> getInput(BasicBlock *BB, const BBSkippedIds &SkipIds) {
   // Values, created by factored BB or inserted into Result as Input
   SmallPtrSet<const Value *, 8> Values;
   SmallVector<Value *, 8> Result;
 
-  auto I = getBeginIt(BB);
-  auto IE = getEndIt(BB);
-  for (; I != IE; ++I) {
+  size_t InstNum = 0;
+  SkipIds.checkBegin();
+  for (auto I = getBeginIt(BB), IE = getEndIt(BB); I != IE; ++I, ++InstNum) {
+    if (SkipIds.contains(InstNum)) {
+      continue;
+    }
     Values.insert(&*I);
     assert(!isa<TerminatorInst>(I) && !isa<PHINode>(I) && "Malformed BB");
 
@@ -254,8 +298,8 @@ static SmallVector<size_t, 8> getOutput(const BasicBlock *BB) {
 
 /// Converts instruction numbers of \p BB
 /// into Values * \p NumsInstr
-static SmallVector<Instruction *, 8> convertOutput(BasicBlock *BB,
-                                             const ArrayRef<size_t> NumsInstr) {
+static SmallVector<Instruction *, 8> convertInstIds(BasicBlock *BB,
+                                                    const BBInstIds &NumsInstr) {
   SmallVector<Instruction *, 8> Result;
   Result.reserve(NumsInstr.size());
   if (NumsInstr.empty())
@@ -270,20 +314,44 @@ static SmallVector<Instruction *, 8> convertOutput(BasicBlock *BB,
   return Result;
 }
 
+namespace {
 
-// The way of representing output and skipped instructions of basic blocks
-using BBInstIds = SmallVector<size_t, 8>;
+/// Structure, that keeps all important information about basic blocks,
+/// that are going to be factor out
+struct BBInfo {
+  BBInfo(BasicBlock *BB, const BBSkippedIds &Ids)
+    : BB(BB), Inputs(getInput(BB, Ids))
+  {}
+
+  BasicBlock *BB;
+  SmallVector<Value *, 8> Inputs;
+
+  SmallVector<Instruction *, 8> Outputs;
+  Value *ReturnVal = nullptr;
+
+  void extractReturnValue(const size_t ResultId);
+};
+
+} // end anonymous namespace
+
+void BBInfo::extractReturnValue(const size_t ResultId) {
+  assert(ReturnVal == nullptr && "Return value should be set once");
+  assert(ResultId != Outputs.size() && "Should be index of Outputs");
+
+  std::swap(Outputs[ResultId], Outputs.back());
+  ReturnVal = Outputs.back();
+  Outputs.pop_back();
+}
 
 namespace {
 
 struct BBsCommonInfo {
   size_t Weight;
   BBInstIds OutputIds;
-  // TODO: skip some instructions from factoring out
-  BBInstIds SkippedInsts;
+  BBSkippedIds SkippedInsts;
 
   void mergeOutput(const BBInstIds& Ids);
-
+  void setSkippedInsts(BasicBlock *BB);
 };
 
 } // end anonymous namespace
@@ -302,6 +370,7 @@ void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
     }
     else if (Other < This) {
       It = OutputIds.insert(It, Other); // It points to *IdsIt
+      EIt = OutputIds.end();
       ++IdsIt;
     }
     // else (Other > This) continue;
@@ -311,32 +380,28 @@ void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
     OutputIds.insert(OutputIds.end(), IdsIt, IdsEIt);
 }
 
-namespace {
+/// skips only instructions, that are used outside of BB
+static bool skipInst(const Instruction *I) {
+  return isa<AllocaInst>(I);
+}
 
-/// Structure, that keeps all important information about basic blocks,
-/// that are going to be factor out
-struct BBInfo {
-  BBInfo(BasicBlock *BB)
-      : BB(BB), Inputs(getInput(BB))
-  {}
-
-  BasicBlock *BB;
-  SmallVector<Value *, 8> Inputs;
-
-  SmallVector<Instruction *, 8> Outputs;
-  Value *ReturnVal = nullptr;
-
-  void extractReturnValue(const size_t ResultId) {
-    assert(ReturnVal == nullptr && "Return value should be set once");
-    assert(ResultId != Outputs.size() && "Should be index of Outputs");
-
-    std::swap(Outputs[ResultId], Outputs.back());
-    ReturnVal = Outputs.back();
-    Outputs.pop_back();
+/// Function should be used only after setting OutputIds
+/// \param BB
+void BBsCommonInfo::setSkippedInsts(BasicBlock *BB) {
+  auto Outputs = convertInstIds(BB, OutputIds);
+  for (size_t i = 0, ie = Outputs.size(); i < ie;) {
+    if (!skipInst(Outputs[i])) {
+      ++i;
+      continue;
+    }
+    SkippedInsts.push_back(OutputIds[i]);
+    Outputs.erase(Outputs.begin() + i);
+    OutputIds.erase(OutputIds.begin() + i);
+    --ie;
   }
-};
 
-} // end anonymous namespace
+  SkippedInsts.resetIt();
+}
 
 
 /// \return whether \p BB is able to throw
@@ -358,13 +423,13 @@ static bool canThrow(const BasicBlock *BB) {
 // TODO: ? skip GetElementPtrInst with x86 arch
 /// Calculates Weight of basic block \p BB for further decisions
 static size_t getBBWeight(const BasicBlock *BB) {
-  auto It = getBeginIt(BB), EIt = getEndIt(BB);
+
   // approximate amount of instructions for the backend
   // assume general case, sizes of all instructions are equal
 
   size_t Points = 0;
   size_t StoresAndLoads = 0;
-  for (; It != EIt; ++It) {
+  for (auto It = getBeginIt(BB), EIt = getEndIt(BB); It != EIt; ++It) {
     // skip instructions, that can produce no code
     if (isa<BitCastInst>(It) ||  isa<ICmpInst>(It))
       continue;
@@ -447,7 +512,7 @@ static bool shouldCreateFunction(const size_t Weight, const size_t BBAmount,
 // TODO: set input attributes from created BB
 /// \param Info - Information about model basic block
 /// \return new function, that consists of Basic block \p Info BB
-static Function *createFuncFromBB(const BBInfo &Info) {
+static Function *createFuncFromBB(const BBInfo &Info, const BBSkippedIds &SkippedInsts) {
   BasicBlock *BB = Info.BB;
   auto &Input = Info.Inputs;
   auto &Output = Info.Outputs;
@@ -516,10 +581,13 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   BasicBlock *NewBB = BasicBlock::Create(Context, "Entry", F);
   IRBuilder<> Builder(NewBB);
   Value *ReturnValueF = nullptr;
-  auto I = getBeginIt(BB);
-  auto Ie = getEndIt(BB);
 
-  for (; I != Ie; ++I) {
+  size_t i = 0;
+  SkippedInsts.checkBegin();
+  for (auto I = getBeginIt(BB), IE = getEndIt(BB); I != IE; ++I, ++i) {
+    if (SkippedInsts.contains(i)) {
+      continue;
+    }
     Instruction *NewI = Builder.Insert(I->clone());
     InputToArgs.insert(std::make_pair(&*I, NewI));
 
@@ -555,16 +623,19 @@ static Function *createFuncFromBB(const BBInfo &Info) {
 /// \param Info - Basic block, which is going to be replaced with function call
 /// to \p F
 /// \return true if \p BB was replaced with \p F, false otherwise
-static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
+static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F,
+                                      const BBSkippedIds &SkippedInsts) {
   // check if this BB was already replaced
   BasicBlock *BB = Info.BB;
   auto &Input = Info.Inputs;
   auto &Output = Info.Outputs;
   Value *Result = Info.ReturnVal;
 
-  auto Beg = getBeginIt(BB);
+  auto LastIt = getEndIt(BB);
+  IRBuilder<> Builder(&*LastIt);
+  // save value for future removing old part of basic block
+  --LastIt;
 
-  IRBuilder<> Builder(cast<Instruction>(Beg));
   auto GetValueForArgs = [&Builder](Value *V, Type *T) {
     return V->getType() == T ? V : Builder.CreateBitCast(V, T);
   };
@@ -596,7 +667,6 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
   }
 
   // 4) Save and Replace all Output values
-  Value *LastBBInst = TailCallInst;
   auto AllocaIt = Args.begin() + Input.size();
   for (auto It = Output.begin(), EIt = Output.end(); It != EIt;
        ++It, ++AllocaIt) {
@@ -604,16 +674,35 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F) {
     if (!isInstUsedOutsideParent(CurrentInst))
       continue;
 
-    LastBBInst = Builder.CreateLoad(*AllocaIt);
-    auto BitCasted = GetValueForArgs(LastBBInst, CurrentInst->getType());
+    auto BBLoadInst = Builder.CreateLoad(*AllocaIt);
+    auto BitCasted = GetValueForArgs(BBLoadInst, CurrentInst->getType());
     CurrentInst->replaceAllUsesWith(BitCasted);
   }
 
   // 5) perform cleanup from the end because in opposite llvm will
   // complain that value is still in use
-  auto LastToDelete = getEndIt(BB);
-  while (&*--LastToDelete != LastBBInst)
-    LastToDelete = LastToDelete->eraseFromParent();
+
+  auto InsertBeforeInsts = convertInstIds(BB, SkippedInsts.get());
+  SmallPtrSet<Instruction *, 8> SkipInstsSet(InsertBeforeInsts.begin(),
+                                           InsertBeforeInsts.end());
+  auto FirstInst = getBeginIt(BB);
+  while (SkipInstsSet.count(&*FirstInst))
+    ++FirstInst;
+
+  while (true) {
+    if (SkipInstsSet.count(&*LastIt)) {
+      --LastIt;
+      continue;
+    }
+    if (FirstInst == LastIt)
+    {
+      LastIt->eraseFromParent();
+      break;
+    }
+    LastIt = LastIt->eraseFromParent();
+    --LastIt;
+  }
+
 
   ++MergeCounter;
   return true;
@@ -687,7 +776,7 @@ static bool hasRightOrder(const BBInfo &Info) {
 static void prepareForBBMerging(const BBsCommonInfo &CommonInfo, SmallVectorImpl<BBInfo> &Infos) {
 
   for (BBInfo &Info : Infos) {
-    Info.Outputs = convertOutput(Info.BB, CommonInfo.OutputIds);
+    Info.Outputs = convertInstIds(Info.BB, CommonInfo.OutputIds);
   }
 
   const BBInfo &Model = Infos.front();
@@ -755,15 +844,17 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   std::for_each(BBs.begin()+1, BBs.end(),
     [&CommonInfo](const BasicBlock *BB) { CommonInfo.mergeOutput(getOutput(BB)); });
 
+  CommonInfo.setSkippedInsts(BBs.front());
 
   SmallVector<BBInfo, 8> BBInfos;
-  BBInfos.emplace_back(BBs.front());
+  BBInfos.emplace_back(BBs.front(), CommonInfo.SkippedInsts);
+
   if (!isProfitableReplacement(CommonInfo.Weight, BBInfos.front().Inputs.size(),
                CommonInfo.OutputIds.size())) {
     return false;
   }
   std::for_each(BBs.begin() + 1, BBs.end(),
-    [&BBInfos](BasicBlock *BB) { BBInfos.emplace_back(BB); });
+    [&BBInfos, &CommonInfo](BasicBlock *BB) { BBInfos.emplace_back(BB, CommonInfo.SkippedInsts); });
 
   // Input Validation
   assert(std::equal(std::next(BBInfos.begin()), BBInfos.end(), BBInfos.begin(),
@@ -792,7 +883,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     BBInfos.pop_back();
 
     for (auto &Info : BBInfos) {
-      replaceBBWithFunctionCall(Info, F);
+      replaceBBWithFunctionCall(Info, F, CommonInfo.SkippedInsts);
     }
 
     DEBUG(dbgs() << BBInfos.size()
@@ -809,10 +900,10 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   }
 
 
-  Function *F = createFuncFromBB(BBInfos.front());
+  Function *F = createFuncFromBB(BBInfos.front(), CommonInfo.SkippedInsts);
 
   for (auto &Info : BBInfos) {
-    replaceBBWithFunctionCall(Info, F);
+    replaceBBWithFunctionCall(Info, F, CommonInfo.SkippedInsts);
   }
 
   DEBUG(dbgs() << BBInfos.size()
