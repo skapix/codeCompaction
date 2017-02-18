@@ -104,6 +104,11 @@ class TestCreatingFunctions(unittest.TestCase):
         self.assertEqual(d, 0)
         self.assertFalse(e)
 
+    def test_lifetime(self):
+        name = "lifetime.ll"
+        d, _ = checkFile(g_testCasesDir + name)
+        self.assertEqual(d, 1)
+
 # Tests perform ouput equality
 
 
@@ -152,6 +157,9 @@ class TestIdenticalOutput(unittest.TestCase):
 
     def test_withGlobalMerge(self):
         self.checkFileCorrectness(g_testCasesDir + "/withGlobalMerge.ll")
+
+    def test_lifetime(self):
+        self.checkFileCorrectness(g_testCasesDir + "/lifetime.ll")
 
 if __name__ == '__main__':
     unittest.main()

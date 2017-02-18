@@ -195,19 +195,21 @@ static void debugPrint(const BasicBlock *BB, const StringRef Str) {
                << ". Function: " << BB->getParent()->getName() << '\n');
 }
 
-// The way of representing output and skipped instructions of basic blocks
+/// The way of representing output and skipped instructions of basic blocks
 using BBInstIds = SmallVector<size_t, 8>;
 
+
+// TODO: ? make template with order. Need reverse order, Instruction * values.
 /// Class is used for smart searching of skipped instructions
 /// Class is useful when we need to traverse [getBeginIt, getEndIt) basic block.
 class BBSkippedIds
 {
 public:
   void checkBegin() const { assert(Cur == SkippedIds.begin() &&
-                                "Cur should point to the beginning of the array"); }
+                                   "Cur should point to the beginning of the array"); }
   void push_back(const size_t InstId) {
     assert((SkippedIds.empty() || SkippedIds.back() < InstId) &&
-             "SkippedIds should be sorted");
+           "SkippedIds should be sorted");
     SkippedIds.push_back(InstId);
   }
 
@@ -380,26 +382,87 @@ void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
     OutputIds.insert(OutputIds.end(), IdsIt, IdsEIt);
 }
 
-/// skips only instructions, that are used outside of BB
-static bool skipInst(const Instruction *I) {
-  return isa<AllocaInst>(I);
+/// \param I instruction, that is decided whether to be skipped
+/// \param AlreadySkipped array of already skipped instructions
+/// \param Outputs output instructions
+/// \return true if instruction will not be factored out in separate function
+static bool skipInst(const Instruction *I,
+                     const SmallVectorImpl<Instruction *> &AlreadySkipped,
+                     const SmallVectorImpl<Instruction *> &Outputs) {
+  const BasicBlock *BB = I->getParent();
+  if (find(Outputs, I) != Outputs.end()) {
+    if (isa<AllocaInst>(I))
+      return true;
+
+    if (auto GEP = dyn_cast<GetElementPtrInst>(I)) {
+      auto Ptr = GEP->getPointerOperand();
+      if (const Instruction *PtrInst = dyn_cast<Instruction>(Ptr)) {
+        return PtrInst->getParent() == BB &&
+               (find(AlreadySkipped, PtrInst) != AlreadySkipped.end());
+      }
+      return false;
+    }
+    if (auto BBBitCast = dyn_cast<BitCastInst>(I)) {
+      return find(AlreadySkipped, BBBitCast->getOperand(0)) != AlreadySkipped.end();
+    }
+  } // find(Outputs, I) != Outputs.end()
+
+  if (auto BBIntr = dyn_cast<IntrinsicInst>(I)) {
+    auto ID = BBIntr->getIntrinsicID();
+    if (ID == Intrinsic::ID::lifetime_start) { // llvm.lifetime.start(size, pointer)
+      return find(AlreadySkipped, BBIntr->getArgOperand(1)) != AlreadySkipped.end();
+    }
+    if (ID == Intrinsic::lifetime_end) { // llvm.lifetime.end(size, pointer)
+      Value *Op = BBIntr->getArgOperand(1);
+      auto Bitcast = cast<Instruction>(Op);
+      return Bitcast->getParent() != BB;
+    }
+    return false;
+  }
+
+  // Following code handles AllocaCast's that are not in the outputs in the special way
+  // It looks at uses of this alloca. If any of these uses is going to be an output =>
+  // alloca instruction should be factored out
+  if (auto *BBAlloca = dyn_cast<AllocaInst>(I)) {
+    for (auto BBAllocaUser : BBAlloca->users()) {
+      if (!isa<Instruction>(BBAllocaUser))
+        continue;
+
+      const Instruction *I = cast<Instruction>(BBAllocaUser);
+      if (I->getParent() == BB && (find(Outputs, BBAllocaUser) != Outputs.end())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  return false;
 }
 
 /// Function should be used only after setting OutputIds
-/// \param BB
 void BBsCommonInfo::setSkippedInsts(BasicBlock *BB) {
-  auto Outputs = convertInstIds(BB, OutputIds);
-  for (size_t i = 0, ie = Outputs.size(); i < ie;) {
-    if (!skipInst(Outputs[i])) {
-      ++i;
-      continue;
-    }
-    SkippedInsts.push_back(OutputIds[i]);
-    Outputs.erase(Outputs.begin() + i);
-    OutputIds.erase(OutputIds.begin() + i);
-    --ie;
-  }
+  const auto Outputs = convertInstIds(BB, OutputIds);
+  SmallVector<Instruction *, 8> CurBBSkippedInsts;
 
+  auto AddSkippedInst = [&](size_t InstNum, Instruction *Inst)
+  {
+    CurBBSkippedInsts.push_back(Inst);
+    SkippedInsts.push_back(InstNum);
+
+    auto It = find(OutputIds, InstNum);
+    if (It == OutputIds.end())
+      return;
+    OutputIds.erase(It);
+  };
+
+  size_t i = 0;
+  for (auto It = getBeginIt(BB), EIt = getEndIt(BB); It != EIt; ++It, ++i) {
+    if (skipInst(&*It, CurBBSkippedInsts, Outputs)) {
+      AddSkippedInst(i, &*It);
+    }
+
+  }
   SkippedInsts.resetIt();
 }
 
