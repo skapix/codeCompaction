@@ -320,31 +320,88 @@ convertInstIds(BasicBlock *BB, const BBInstIds &NumsInstr) {
 
 namespace {
 
-/// Structure, that keeps all important information about basic blocks,
-/// that are going to be factor out
-struct BBInfo {
-  BBInfo(BasicBlock *BB, const SmartSortedSet &SkippedIds)
-      : BB(BB), Inputs(getInput(BB, SkippedIds)) {}
+/// Class, that keeps all important information about each basic block,
+/// that is going to be factor out. Evaluates values as lazy as possible
+class BBInfo {
+public:
+  BBInfo(BasicBlock *BB, const SmartSortedSet &SkippedIds, const BBInstIds &OutputIds)
+      : BB(BB), SkippedIds(SkippedIds), OutputIds(OutputIds)
+        {}
+  BBInfo &operator=(const BBInfo &Other);
 
-  BasicBlock *BB;
-  SmallVector<Value *, 8> Inputs;
 
-  SmallVector<Instruction *, 8> Outputs;
-  Value *ReturnVal = nullptr;
+  BasicBlock *getBB() const {return BB;}
 
+  const SmallVector<Value *, 8> &getInputs() const;
+  const SmallVector<Instruction *, 8> &getOutputs() const;
+
+  void permutateInputs(const SmallVectorImpl<size_t> &Permut);
+  Value *getReturnValue() const {return ReturnValue;}
   void extractReturnValue(const size_t ResultId);
+
+private:
+  BasicBlock *BB;
+
+  const SmartSortedSet &SkippedIds;
+  const BBInstIds &OutputIds;
+  mutable Optional<SmallVector<Value *, 8>> Inputs;
+  mutable SmallVector<Instruction *, 8> Outputs;
+  mutable Value *ReturnValue = nullptr;
 };
 
 } // end anonymous namespace
 
-void BBInfo::extractReturnValue(const size_t ResultId) {
-  assert(ReturnVal == nullptr && "Return value should be set once");
-  assert(ResultId != Outputs.size() && "Should be index of Outputs");
+const SmallVector<Value *, 8> &BBInfo::getInputs() const {
+  if (!Inputs)
+    Inputs = getInput(BB, SkippedIds);
+  return *Inputs;
+}
 
-  std::swap(Outputs[ResultId], Outputs.back());
-  ReturnVal = Outputs.back();
+const SmallVector<Instruction *, 8> &BBInfo::getOutputs() const {
+  if (!ReturnValue && !OutputIds.empty() && Outputs.empty())
+    Outputs = convertInstIds(BB, OutputIds);
+  return Outputs;
+}
+
+/// \return vector of \p Inputs, permutated with \p Permuts
+static SmallVector<Value *, 8> applyPermutation(
+  const SmallVectorImpl<Value *> &Inputs, const SmallVectorImpl<size_t> &Permuts) {
+  SmallVector<Value *, 8> Result;
+  Result.reserve(Inputs.size());
+  for (size_t Perm : Permuts) {
+    Result.push_back(Inputs[Perm]);
+  }
+  return Result;
+}
+
+void BBInfo::permutateInputs(const SmallVectorImpl<size_t> &Permut) {
+  Inputs = applyPermutation(getInputs(), Permut);
+}
+void BBInfo::extractReturnValue(const size_t ResultId) {
+
+  assert(ReturnValue == nullptr && "Return value should be set once");
+  if (getOutputs().size() == ResultId) {
+    return;
+  }
+  assert(ResultId < Outputs.size() && "Should be index of Outputs");
+
+  ReturnValue = Outputs[ResultId];
+  Outputs[ResultId] = Outputs.back();
   Outputs.pop_back();
 }
+
+BBInfo &BBInfo::operator=(const BBInfo &Other) {
+  if (this != &Other) {
+    BB = Other.BB;
+    Inputs = Other.Inputs;
+    Outputs = Other.Outputs;
+    ReturnValue = Other.ReturnValue;
+    // no need in copying references since they are the same for each BBInfo
+  }
+  return *this;
+
+}
+
 
 namespace {
 
@@ -600,10 +657,10 @@ static bool shouldCreateFunction(const size_t Weight, const size_t BBAmount,
 /// \return new function, that consists of Basic block \p Info BB
 static Function *createFuncFromBB(const BBInfo &Info,
                                   const SmartSortedSet &SkippedInsts) {
-  BasicBlock *BB = Info.BB;
-  auto &Input = Info.Inputs;
-  auto &Output = Info.Outputs;
-  const Value *ReturnValue = Info.ReturnVal;
+  BasicBlock *BB = Info.getBB();
+  auto &Input = Info.getInputs();
+  auto &Output = Info.getOutputs();
+  const Value *ReturnValue = Info.getReturnValue();
 
   Module *M = BB->getModule();
   LLVMContext &Context = M->getContext();
@@ -694,7 +751,8 @@ static Function *createFuncFromBB(const BBInfo &Info,
       ReturnValueF = NewI;
     }
   }
-
+  assert((ReturnValue == nullptr) == (ReturnValueF == nullptr) &&
+           "Return value in basic block should be found, but it wasn't");
   if (ReturnValueF)
     Builder.CreateRet(ReturnValueF);
   else
@@ -713,10 +771,10 @@ static Function *createFuncFromBB(const BBInfo &Info,
 static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F,
                                       const SmartSortedSet &SkippedInsts) {
   // check if this BB was already replaced
-  BasicBlock *BB = Info.BB;
-  auto &Input = Info.Inputs;
-  auto &Output = Info.Outputs;
-  Value *Result = Info.ReturnVal;
+  BasicBlock *BB = Info.getBB();
+  auto &Input = Info.getInputs();
+  auto &Output = Info.getOutputs();
+  Value *Result = Info.getReturnValue();
 
   auto LastIt = getEndIt(BB);
   IRBuilder<> Builder(&*LastIt);
@@ -805,13 +863,15 @@ static size_t getFunctionRetValId(const ArrayRef<Instruction *> Outputs) {
   return Outputs.size();
 }
 
-/// \param F - possible function to be merged with args \p Inputs, \p Outputs
-/// \returns true, if the Function F, that consists of 1 basic block can be used
-/// as a callee of other basic blocks
-static bool hasRightOrder(const BBInfo &Info) {
-  const Function *F = Info.BB->getParent();
-  const SmallVectorImpl<Value *> &Inputs = Info.Inputs;
-  const SmallVectorImpl<Instruction *> &Outputs = Info.Outputs;
+
+/// \param Info bb, which parent F can be possibly merged with args \p Inputs, \p Outputs
+/// \param Permut - result of permutation of input to function arguments.
+/// \p Permut sets only if isMergable returns true
+/// \return true, if the Function F, that consists of 1 basic block can be used
+/// as a callee for other basic blocks
+static bool isMergeable(const BBInfo &Info, SmallVectorImpl<size_t> &Permut) {
+  const Function *F = Info.getBB()->getParent();
+  const SmallVectorImpl<Value *> &Inputs = Info.getInputs();
 
   assert(F->size() == 1);
   if (F->isVarArg())
@@ -819,76 +879,38 @@ static bool hasRightOrder(const BBInfo &Info) {
   assert(!isa<PHINode>(F->front().front()) &&
          "Functions with solo basic block can't contain any phi nodes");
 
-  bool BBNotVoid = Info.ReturnVal != nullptr;
-  bool NotVoid = F->getReturnType() != Type::getVoidTy(F->getContext());
+  assert(Info.getReturnValue() == nullptr && "Return value should not be set");
 
-  if (BBNotVoid != NotVoid) {
-    return false;
-  }
-
-  if (Inputs.size() + Outputs.size() < F->arg_size()) {
+  if (Inputs.size() != F->arg_size()) {
     // don't use functions with unused arguments
     return false;
   }
-  assert(Inputs.size() + Outputs.size() == F->arg_size());
 
-  Value *ReturnVal = nullptr;
-  if (NotVoid) {
-    ReturnVal = cast<ReturnInst>(F->front().back()).getReturnValue();
-    if (Info.ReturnVal != ReturnVal)
-      return false;
-  }
-
-  auto It = F->arg_begin();
-  for (auto Input : Inputs) {
-    if (&*It++ != Input)
-      return false;
-  }
-
-  for (auto Output : Outputs) {
-    if (Output == ReturnVal)
-      continue;
-    if (static_cast<const Value *>(&*It++) != Output)
-      return false;
+  Permut.clear();
+  Permut.reserve(Inputs.size());
+  for (auto &Arg : F->args()) {
+    size_t Id = find(Inputs, &Arg) - Inputs.begin();
+    assert(Id != Inputs.size() &&
+             "Function argument not found. Check correctness of getting inputs");
+    Permut.push_back(Id);
   }
 
   return true;
 }
 
-/// \param CommonInfo used for setting \p Infos output and return values
-/// \param Infos [in, out] set Outputs and return value, found in Model into
-/// \p Infos
-static void prepareForBBMerging(const BBInstIds &OutputIds,
-                                SmallVectorImpl<BBInfo> &Infos) {
-
-  for (BBInfo &Info : Infos) {
-    Info.Outputs = convertInstIds(Info.BB, OutputIds);
-  }
-
-  const BBInfo &Model = Infos.front();
-  size_t ReturnIdF = getFunctionRetValId(Model.Outputs);
-  if (ReturnIdF == Model.Outputs.size()) {
-    // return type void ~ nullptr
-    return;
-  }
-
-  for (BBInfo &Info : Infos) {
-    Info.extractReturnValue(ReturnIdF);
-  }
-}
-
 /// Tries to find appropriate function for factoring out
 /// \param BBs basic blocks, which parents are observed
+/// \param Permuts Input Permutation if appropriate function was found
 /// \return basic block, which function is suitable for merging
 /// or size of \p BBs if function was not found
-static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs) {
+static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
+                                   SmallVectorImpl<size_t> &Permuts) {
   size_t i = 0;
   for (size_t ei = BBs.size(); i < ei; ++i) {
-    const Function *F = BBs[i].BB->getParent();
+    const Function *F = BBs[i].getBB()->getParent();
     if (F->size() == 1) {
-      // check the order of passed arguments
-      if (hasRightOrder(BBs[i]))
-        return i;
+      if (isMergeable(BBs[i], Permuts))
+        break;
     }
   }
   return i;
@@ -923,64 +945,62 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     return false;
   }
   SmallVector<BBInfo, 8> BBInfos;
-  BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts());
+  BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts(), CommonInfo.getOutputIds());
 
   if (!isProfitableReplacement(CommonInfo.getWeight(),
-                               BBInfos.front().Inputs.size(),
+                               BBInfos.front().getInputs().size(),
                                CommonInfo.getOutputIds().size())) {
     return false;
   }
+
   std::for_each(BBs.begin() + 1, BBs.end(),
                 [&BBInfos, &CommonInfo](BasicBlock *BB) {
-                  BBInfos.emplace_back(BB, CommonInfo.getSkippedInsts());
+                  BBInfos.emplace_back(BB, CommonInfo.getSkippedInsts(), CommonInfo.getOutputIds());
                 });
 
-  // Input Validation
-  assert(std::equal(std::next(BBInfos.begin()), BBInfos.end(), BBInfos.begin(),
-                    [](const BBInfo &Val1, const BBInfo &Val2) {
-                      return Val1.Inputs.size() == Val2.Inputs.size() &&
-                             std::equal(
-                                 Val1.Inputs.begin(), Val1.Inputs.end(),
-                                 Val2.Inputs.begin(), Val2.Inputs.end(),
-                                 [](Value *V1, Value *V2) {
-                                   return V1->getType()->canLosslesslyBitCastTo(
-                                       V2->getType());
-                                 });
-                    }) &&
-         "Input argument types of identity BBs must be equal");
+  // Try to find suitable for merging function
+  // If basic block has more, than 1 output, function can not be found
+  // because llvm doesn't support multiple return values
+  if (CommonInfo.getOutputIds().size() <= 1) {
+    SmallVector<size_t, 8> Permuts;
+    size_t Id = findAppropriateBBsId(BBInfos, Permuts);
+    if (Id != BBInfos.size()) {
+      Function *F = BBInfos[Id].getBB()->getParent();
 
-  // Try to find suitable function for merging
+      // remove BBInfos[Id] from replacing
+      BBInfos[Id] = BBInfos.back();
+      BBInfos.pop_back();
 
-  prepareForBBMerging(CommonInfo.getOutputIds(), BBInfos);
 
-  size_t Id = findAppropriateBBsId(BBInfos);
-  if (Id != BBInfos.size()) {
-    Function *F = BBInfos[Id].BB->getParent();
+      for (auto &Info : BBInfos) {
+        Info.permutateInputs(Permuts);
+        Info.extractReturnValue(0);
+        replaceBBWithFunctionCall(Info, F, CommonInfo.getSkippedInsts());
+      }
 
-    // remove BBInfos[Id] from replacing
-    std::swap(BBInfos[Id], BBInfos.back());
-    BBInfos.pop_back();
-
-    for (auto &Info : BBInfos) {
-      replaceBBWithFunctionCall(Info, F, CommonInfo.getSkippedInsts());
+      DEBUG(dbgs() << BBInfos.size()
+                   << " basic blocks were replaced with existed function "
+                   << F->getName() << "\n");
+      return true;
     }
-
-    DEBUG(dbgs() << BBInfos.size()
-                 << " basic blocks were replaced with existed function "
-                 << F->getName() << "\n");
-    return true;
   }
 
   if (!shouldCreateFunction(CommonInfo.getWeight(), BBInfos.size(),
-                            BBInfos.front().Inputs.size(),
+                            BBInfos.front().getInputs().size(),
                             CommonInfo.getOutputIds().size())) {
     debugPrint(BBs.front(), "Unprofitable replacement");
     return false;
   }
 
-  Function *F = createFuncFromBB(BBInfos.front(), CommonInfo.getSkippedInsts());
+  auto &Model = BBInfos.front();
+  size_t ReturnIdF = getFunctionRetValId(Model.getOutputs());
+  Model.extractReturnValue(ReturnIdF);
+  Function *F = createFuncFromBB(Model, CommonInfo.getSkippedInsts());
 
   for (auto &Info : BBInfos) {
+    // Model return value is already set
+    if (&Info != &Model)
+      Info.extractReturnValue(ReturnIdF);
     replaceBBWithFunctionCall(Info, F, CommonInfo.getSkippedInsts());
   }
 

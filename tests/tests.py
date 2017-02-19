@@ -109,6 +109,18 @@ class TestCreatingFunctions(unittest.TestCase):
         d, _ = checkFile(g_testCasesDir + name)
         self.assertEqual(d, 1)
 
+    def test_mergeNoOutput(self):
+        name = "mergeNoOutput.ll"
+        d, e = checkFile(g_testCasesDir + name)
+        self.assertEqual(d, 0)
+        self.assertFalse(e)
+
+    def test_mergeUnusedOutput(self):
+            name = "mergeUnusedOutput.ll"
+            d, e = checkFile(g_testCasesDir + name)
+            self.assertEqual(d, 0)
+            self.assertFalse(e)
+
 # Tests perform ouput equality
 
 
@@ -160,6 +172,14 @@ class TestIdenticalOutput(unittest.TestCase):
 
     def test_lifetime(self):
         self.checkFileCorrectness(g_testCasesDir + "/lifetime.ll")
+
+    def test_mergeNoOutput(self):
+        self.checkFileCorrectness(g_testCasesDir + "/mergeNoOutput.ll")
+
+    def test_mergeUnusedOutput(self):
+        self.checkFileCorrectness(g_testCasesDir + "/mergeUnusedOutput.ll")
+
+        
 
 if __name__ == '__main__':
     unittest.main()

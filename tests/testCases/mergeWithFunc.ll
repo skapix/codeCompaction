@@ -1,8 +1,8 @@
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
-define i32 @foo(i32 %i) {
+define i32 @foo(i32 %i, i32 %j, i32 %k) {
 entry:
-  %mul = mul nsw i32 %i, %i
+  %mul = mul nsw i32 %k, %j
   %mul1 = mul nsw i32 %i, 5
   %add = add nuw nsw i32 %mul1, %mul
   %sub = sub nsw i32 %mul1, %mul
@@ -10,14 +10,14 @@ entry:
   ret i32 %mul4
 }
 
-define i32 @bar(i32 %i) {
+define i32 @bar(i32 %i, i32 %j, i32 %k) {
 entry:
   %cmp = icmp slt i32 %i, 0
   br i1 %cmp, label %if.then, label %return
 
 if.then:
-  %mul = mul nsw i32 %i, %i
-  %mul1 = mul nsw i32 %i, 5
+  %mul = mul nsw i32 %k, %i
+  %mul1 = mul nsw i32 %j, 5
   %add = add nuw nsw i32 %mul1, %mul
   %sub = sub nsw i32 %mul1, %mul
   %mul4 = mul nsw i32 %add, %sub
@@ -29,9 +29,9 @@ return:
 }
 
 define i32 @main() {
-  %call1 = call i32 @foo(i32 3)
+  %call1 = call i32 @foo(i32 3, i32 4, i32 5)
   %call2 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call1)
-  %call3 = call i32 @bar(i32 4)
+  %call3 = call i32 @bar(i32 5, i32 4, i32 3)
   %call4 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str, i32 0, i32 0), i32 %call3)
   ret i32 0
 }
