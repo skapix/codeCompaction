@@ -12,7 +12,7 @@
 /// them.
 /// Bacic blocks comparison is almost the same as in MergeFunctions.cpp, but
 /// with commutativity check and without checking phi values and term insts,
-/// because they are not part of our factored BB.
+/// because these instructions are not part of our factored BB.
 /// After finding identity BBs, pass creates new function (if necessary)
 /// and replaces the factored BB with tail call to the appropriate function.
 /// Pass works only with well-formed basic blocks.
@@ -40,23 +40,11 @@ STATISTIC(FunctionCounter, "Counts amount of created functions");
 
 using namespace llvm;
 
-// used for testing
 static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden,
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
-// TODO: ? decide what to do with extra value of lifetime start/end and
-// similar intrinsics, that create variables, but don't produce any code.
-// The main issue is that these variables are used as input/output arguments for
-// created functions
-// Possible solutions:
-// a) remove the entries, which are the part of our block [easier to implement]
-// b) don't factor out these instructions into new function [preferable]
 // TODO: ? place BB comparing in this file
-
-// TODO: ? Elaborate function searching
-//   a) If suitable function exists, but arguments order is not the same,
-// try to permute bb's input/output arguments to be able to call the function.
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -200,8 +188,9 @@ static void debugPrint(const BasicBlock *BB, const StringRef Str) {
 using BBInstIds = SmallVector<size_t, 8>;
 
 /// Class is used to find values in sorted array.
-/// Values, that should be found must be ordered
-/// Class is useful when we need to traverse [getBeginIt, getEndIt) basic block.
+/// Values, that should be found must be ordered.
+/// Class is useful when we need to traverse all
+/// BB insts [getBeginIt, getEndIt) and find particular instructions
 class SmartSortedSet {
 public:
   SmartSortedSet() { resetIt(); }
@@ -324,19 +313,18 @@ namespace {
 /// that is going to be factor out. Evaluates values as lazy as possible
 class BBInfo {
 public:
-  BBInfo(BasicBlock *BB, const SmartSortedSet &SkippedIds, const BBInstIds &OutputIds)
-      : BB(BB), SkippedIds(SkippedIds), OutputIds(OutputIds)
-        {}
+  BBInfo(BasicBlock *BB, const SmartSortedSet &SkippedIds,
+         const BBInstIds &OutputIds)
+      : BB(BB), SkippedIds(SkippedIds), OutputIds(OutputIds) {}
   BBInfo &operator=(const BBInfo &Other);
 
-
-  BasicBlock *getBB() const {return BB;}
+  BasicBlock *getBB() const { return BB; }
 
   const SmallVector<Value *, 8> &getInputs() const;
   const SmallVector<Instruction *, 8> &getOutputs() const;
 
   void permutateInputs(const SmallVectorImpl<size_t> &Permut);
-  Value *getReturnValue() const {return ReturnValue;}
+  Value *getReturnValue() const { return ReturnValue; }
   void extractReturnValue(const size_t ResultId);
 
 private:
@@ -364,8 +352,9 @@ const SmallVector<Instruction *, 8> &BBInfo::getOutputs() const {
 }
 
 /// \return vector of \p Inputs, permutated with \p Permuts
-static SmallVector<Value *, 8> applyPermutation(
-  const SmallVectorImpl<Value *> &Inputs, const SmallVectorImpl<size_t> &Permuts) {
+static SmallVector<Value *, 8>
+applyPermutation(const SmallVectorImpl<Value *> &Inputs,
+                 const SmallVectorImpl<size_t> &Permuts) {
   SmallVector<Value *, 8> Result;
   Result.reserve(Inputs.size());
   for (size_t Perm : Permuts) {
@@ -399,9 +388,7 @@ BBInfo &BBInfo::operator=(const BBInfo &Other) {
     // no need in copying references since they are the same for each BBInfo
   }
   return *this;
-
 }
-
 
 namespace {
 
@@ -501,7 +488,7 @@ static bool skipInst(const Instruction *I,
   }
 
   // Following code handles AllocaCast's that are not in the outputs in the
-  // special way It looks at uses of this alloca. If any of these uses is going
+  // special way: It looks at uses of this alloca. If any of these uses is going
   // to be an output => alloca instruction should be factored out
   if (auto *BBAlloca = dyn_cast<AllocaInst>(I)) {
     for (auto BBAllocaUser : BBAlloca->users()) {
@@ -520,7 +507,6 @@ static bool skipInst(const Instruction *I,
   return false;
 }
 
-/// Function should be used only after setting OutputIds
 void BBsCommonInfo::setSkippedInsts(BasicBlock *BB) {
   const auto Outputs = convertInstIds(BB, OutputIds);
   SmallVector<Instruction *, 8> CurBBSkippedInsts;
@@ -544,7 +530,8 @@ void BBsCommonInfo::setSkippedInsts(BasicBlock *BB) {
   SkippedInsts.resetIt();
 }
 
-// TODO: ? skip GetElementPtrInst with x86 arch
+// TODO: ? make architecture-dependent weight calculation.
+//       e.g skip GetElementPtrInst for x86 arch
 /// Calculates Weight of basic block \p BB for further decisions
 size_t BBsCommonInfo::calculateWeight(const BasicBlock *BB) {
 
@@ -609,10 +596,8 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
-/// Decides, whether it is profitable to factor out without creating
-/// any functions
-/// \param Weight - basic block weight, returned by getBBWeight(const BasicBlock
-/// *)
+/// Decides, whether it is profitable to factor out BBs, creating no function
+/// \param Weight - basic block weight
 /// \param InputArgs - amount of input basic block arguments
 /// \param OutputArgs - amount of output basic block arguments
 /// \return true if profitable
@@ -626,8 +611,7 @@ static bool isProfitableReplacement(const size_t Weight, const size_t InputArgs,
 }
 
 /// Decides, whether it is profitable to factor out BB, creating a function
-/// \param Weight - basic block weight, returned by getBBWeight(const BasicBlock
-/// *)
+/// \param Weight - basic block weight
 /// \param BBAmount - amount of merging basic blocks
 /// \param InputArgs - amount of input basic block arguments
 /// \param OutputArgs - amount of output basic block arguments
@@ -652,7 +636,7 @@ static bool shouldCreateFunction(const size_t Weight, const size_t BBAmount,
   return BBAmount * InstsProfitBy1Replacement - FunctionCreationCost >= 0;
 }
 
-// TODO: set input attributes from created BB
+// TODO: ? set input attributes from created BB
 /// \param Info - Information about model basic block
 /// \return new function, that consists of Basic block \p Info BB
 static Function *createFuncFromBB(const BBInfo &Info,
@@ -752,7 +736,7 @@ static Function *createFuncFromBB(const BBInfo &Info,
     }
   }
   assert((ReturnValue == nullptr) == (ReturnValueF == nullptr) &&
-           "Return value in basic block should be found, but it wasn't");
+         "Return value in basic block should be found, but it wasn't");
   if (ReturnValueF)
     Builder.CreateRet(ReturnValueF);
   else
@@ -863,12 +847,11 @@ static size_t getFunctionRetValId(const ArrayRef<Instruction *> Outputs) {
   return Outputs.size();
 }
 
-
-/// \param Info bb, which parent F can be possibly merged with args \p Inputs, \p Outputs
-/// \param Permut - result of permutation of input to function arguments.
-/// \p Permut sets only if isMergable returns true
-/// \return true, if the Function F, that consists of 1 basic block can be used
-/// as a callee for other basic blocks
+/// \param Info BB, which parent F can be used as a callee for other BBs
+/// \param Permut - result of permutation of input to function
+/// arguments. \p Permut sets only if isMergable returns true \return true, if
+/// the Function F, that consists of 1 basic block can be used as a callee for
+/// other basic blocks
 static bool isMergeable(const BBInfo &Info, SmallVectorImpl<size_t> &Permut) {
   const Function *F = Info.getBB()->getParent();
   const SmallVectorImpl<Value *> &Inputs = Info.getInputs();
@@ -891,7 +874,7 @@ static bool isMergeable(const BBInfo &Info, SmallVectorImpl<size_t> &Permut) {
   for (auto &Arg : F->args()) {
     size_t Id = find(Inputs, &Arg) - Inputs.begin();
     assert(Id != Inputs.size() &&
-             "Function argument not found. Check correctness of getting inputs");
+           "Function argument not found. Check correctness of getting inputs");
     Permut.push_back(Id);
   }
 
@@ -919,11 +902,10 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
 /// Common steps of replacing equal basic blocks
 /// 1) Separate basic blocks by output values into sets of basic blocks
 /// and try to merge each of these sets with existing basic block
-/// 2) Combine all outputs and watch if there is a function (with 1 this block)
-/// which can replace all others
-/// 3) If there are some basic blocks left, create function and merge all the
-/// rest basic blocks, if it is profitable to replace them with newly-created
-/// function
+/// 2) Combine all outputs and watch if there is an appripriate
+/// function (with 1 this block), which can be used as a callee
+/// 3) Create function and merge all the rest basic blocks,
+/// if it is profitable to replace them with newly-created function
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
 bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
@@ -945,7 +927,8 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     return false;
   }
   SmallVector<BBInfo, 8> BBInfos;
-  BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts(), CommonInfo.getOutputIds());
+  BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts(),
+                       CommonInfo.getOutputIds());
 
   if (!isProfitableReplacement(CommonInfo.getWeight(),
                                BBInfos.front().getInputs().size(),
@@ -955,7 +938,8 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
 
   std::for_each(BBs.begin() + 1, BBs.end(),
                 [&BBInfos, &CommonInfo](BasicBlock *BB) {
-                  BBInfos.emplace_back(BB, CommonInfo.getSkippedInsts(), CommonInfo.getOutputIds());
+                  BBInfos.emplace_back(BB, CommonInfo.getSkippedInsts(),
+                                       CommonInfo.getOutputIds());
                 });
 
   // Try to find suitable for merging function
@@ -970,7 +954,6 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
       // remove BBInfos[Id] from replacing
       BBInfos[Id] = BBInfos.back();
       BBInfos.pop_back();
-
 
       for (auto &Info : BBInfos) {
         Info.permutateInputs(Permuts);
