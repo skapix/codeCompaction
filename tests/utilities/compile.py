@@ -35,7 +35,7 @@ def createProcess(query):
         query.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     ecode = process.wait()
     out, err = process.communicate()
-    return (ecode, out.decode("utf-8")) if ecode == 0 else (ecode, err.decode("utf-8"))
+    return (ecode, out.decode("utf-8"), err.decode("utf-8"))
 
 
 class Compile:
@@ -87,7 +87,7 @@ class Compile:
         extraArgs = getArg(self.compileInfo.program) if args == "" else args
         Compile.__createDirs(self.outputFile)
         query = self.__createQuery(extraArgs)
-        (self.errorCode, self.output) = createProcess(query)
+        (self.errorCode, self.output, self.error) = createProcess(query)
         if self.errorCode != 0:
-            raise Exception("Query: " + query + "\nError: " + self.output)
-        return (self.errorCode, self.output)
+            raise Exception("Query: " + query + "\nError: " + self.error)
+        return (self.errorCode, self.output, self.error)

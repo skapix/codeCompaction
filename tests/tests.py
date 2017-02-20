@@ -47,7 +47,7 @@ def checkFile(filename):
 
     comp = createOptCompile(filename)
     comp.outputFile = ""
-    rc, content1 = comp.compile("-S -bbfactor-force-merging")
+    _, content1, _ = comp.compile("-S -bbfactor-force-merging")
 
     num0 = getFuncAmount(io.StringIO(content0))
     num1 = getFuncAmount(io.StringIO(content1))
@@ -143,7 +143,7 @@ class TestIdenticalOutput(unittest.TestCase):
 
         comp = createOptCompile(filename)
         comp.outputFile = tmpFile
-        rc, content1 = comp.compile("-S -bbfactor-force-merging")
+        comp.compile("-S -bbfactor-force-merging")
         self.assertEqual(getLLiOutput(filename), getLLiOutput(tmpFile))
 
     def test_noOutput(self):

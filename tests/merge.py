@@ -68,9 +68,9 @@ def llvmLink(filenames, outputFile):
     addReadability = " -S" if getExt(outputFile) == ".ll" else ""
     addArgs = getArg(g_link)
     query = g_link + " " + filenameQuery + addReadability + " " + addArgs + "-o " + outputFile
-    (errCode, out) = createProcess(query)
+    (errCode, out, error) = createProcess(query)
     if errCode != 0:
-        printError("Query: " + query + "\nError: " + out)
+        printError("Query: " + query + "\nError: " + error)
     return errCode
 
 
