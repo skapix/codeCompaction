@@ -12,7 +12,12 @@ def createOptCompile(filename, arch = ""):
 
     result = Compile(filename, "", optInfo)
     archAdd = "" if arch == "" else arch + "/"
-    result.outputFile = g_commonDir + "/" + archAdd + getShortName(filename) + "_bbf.ll"
+    assert getExt(filename) == ".bc" or getExt(filename) == ".ll", "Passed wrong file for optimizator"
+    ending = "_bbf.bc"
+    if getExt(filename) == ".ll":
+        ending = "_bbf.ll"
+        result.compileInfo.args += " -S"
+    result.outputFile = g_commonDir + "/" + archAdd + getShortName(filename) + ending
     
     return result
 

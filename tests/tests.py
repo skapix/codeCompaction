@@ -29,14 +29,6 @@ def getFuncAmount(f):
     return result
 
 
-def equalModules(m0, m1):
-    m0.readline()
-    m0.readline()
-    m1.readline()
-    m1.readline()
-    return m0.read() == m1.read()
-
-
 def checkFile(filename):
     assert getExt(filename) == ".ll", "Bad extension: " + getExt(filename)
     assert os.path.exists(filename), "Path not exists: " + os.path.abspath(filename)
@@ -47,14 +39,12 @@ def checkFile(filename):
 
     comp = createOptCompile(filename)
     comp.outputFile = ""
-    _, content1, _ = comp.compile("-S -bbfactor-force-merging")
+    _, content1, _ = comp.compile("-bbfactor-force-merging")
 
     num0 = getFuncAmount(io.StringIO(content0))
     num1 = getFuncAmount(io.StringIO(content1))
-    if num1 == num0:
-        return 0, equalModules(io.StringIO(content0), io.StringIO(content1))
-    else:
-        return (num1 - num0, False)
+
+    return num1 - num0
 
 # end compare amount of functions utils
 # Tests perform query correctness to the opt and calculate amount of created functions
@@ -64,62 +54,47 @@ class TestCreatingFunctions(unittest.TestCase):
 
     def test_noOutput(self):
         name = "noOutput.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_soloOutput(self):
         name = "soloOutput.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_phiNodes(self):
         name = "phiNodes.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_mergeWithFunc(self):
         name = "mergeWithFunc.ll"
-        d, e = checkFile(g_testCasesDir + name)
-        self.assertEqual(d, 0)
-        self.assertFalse(e)
+        self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
     def test_structReturn(self):
         name = "structReturn.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_differentOutput(self):
         name = "differentOutput.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_withExceptions(self):
         name = "withExceptions.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertGreaterEqual(d, 1)
+        self.assertGreaterEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_withGlobalMerge(self):
         name = "withGlobalMerge.ll"
-        d, e = checkFile(g_testCasesDir + name)
-        self.assertEqual(d, 0)
-        self.assertFalse(e)
+        self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
     def test_lifetime(self):
         name = "lifetime.ll"
-        d, _ = checkFile(g_testCasesDir + name)
-        self.assertEqual(d, 1)
+        self.assertEqual(checkFile(g_testCasesDir + name), 1)
 
     def test_mergeNoOutput(self):
         name = "mergeNoOutput.ll"
-        d, e = checkFile(g_testCasesDir + name)
-        self.assertEqual(d, 0)
-        self.assertFalse(e)
+        self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
     def test_mergeUnusedOutput(self):
             name = "mergeUnusedOutput.ll"
-            d, e = checkFile(g_testCasesDir + name)
-            self.assertEqual(d, 0)
-            self.assertFalse(e)
+            self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
 # Tests perform ouput equality
 
@@ -143,7 +118,7 @@ class TestIdenticalOutput(unittest.TestCase):
 
         comp = createOptCompile(filename)
         comp.outputFile = tmpFile
-        comp.compile("-S -bbfactor-force-merging")
+        comp.compile("-bbfactor-force-merging")
         self.assertEqual(getLLiOutput(filename), getLLiOutput(tmpFile))
 
     def test_noOutput(self):

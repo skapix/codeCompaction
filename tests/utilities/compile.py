@@ -2,6 +2,7 @@
 
 import os.path
 import subprocess
+from copy import copy
 from utilities.constants import *
 
 #auxiliary var and funcs for additional arguments
@@ -49,14 +50,14 @@ class Compile:
         prog = self.compileInfo.program
         if not prog in compilesToArchInfo:
             raise Exception("Utility " + prog + " not found in arch settings " + archInfo)
-        self.arch = compilesToArchInfo[prog]
+        self.arch = copy(compilesToArchInfo[prog])
 
     def __initCompileInfo(self, compileInfo, filename):
         if compileInfo is None:
-            self.compileInfo = g_filenamesTo[os.path.splitext(filename)[1]]
+            self.compileInfo = copy(g_filenamesTo[os.path.splitext(filename)[1]])
         else:
             assert isinstance(compileInfo, CompileInfo)
-            self.compileInfo = compileInfo
+            self.compileInfo = copy(compileInfo)
 
     def __initOutputFile(self, filename, arch):
         filepath = os.path.split(filename)[1]
