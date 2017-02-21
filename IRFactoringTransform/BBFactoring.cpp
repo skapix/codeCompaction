@@ -23,6 +23,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "../external/merging.h"
+#include "ForceMergeDecisionMaker.h"
+#include "TargetDependent/CommonDecisionMaker.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -41,7 +43,7 @@ STATISTIC(FunctionCounter, "Counts amount of created functions");
 using namespace llvm;
 
 static cl::opt<bool>
-    ForceMerge("bbfactor-force-merging", cl::Hidden,
+    ForceMerge("bbfactor-force-merging", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
 // TODO: ? place BB comparing in this file
@@ -81,8 +83,9 @@ private:
   /// If profitable, creates function with body of BB and replaces BBs
   /// with a call to new function
   /// \param BBs - Vector of identity BBs
+  /// \param DM - target-dependent subroutines
   /// \returns whether BBs were replaced with a function call
-  bool replace(const std::vector<BasicBlock *> &BBs);
+  bool replace(const std::vector<BasicBlock *> &BBs, IDecisionMaker *DM);
 
   /// Comparator for BBNode
   class BBNodeCmp {
@@ -115,6 +118,7 @@ bool BBFactoring::runOnModule(Module &M) {
 
   DEBUG(dbgs() << "Module name: ");
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
+
   std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
 
   // calculate hashes for all basic blocks in every function
@@ -144,9 +148,13 @@ bool BBFactoring::runOnModule(Module &M) {
 
   bool Changed = false;
 
+  const StringRef Arch =
+      M.getTargetTriple().substr(0, M.getTargetTriple().find('-'));
+  auto DM = ForceMerge ? make_unique<ForceMergeDecisionMaker>()
+                       : IDecisionMaker::Create(Arch);
   for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
     if (IdenticalBlocks.size() >= 2) {
-      Changed |= replace(IdenticalBlocks);
+      Changed |= replace(IdenticalBlocks, DM.get());
     }
   }
 
@@ -311,11 +319,14 @@ namespace {
 
 /// Class, that keeps all important information about each basic block,
 /// that is going to be factor out. Evaluates values as lazy as possible
+/// It is created for every BB individually
 class BBInfo {
 public:
   BBInfo(BasicBlock *BB, const SmartSortedSet &SkippedIds,
          const BBInstIds &OutputIds)
       : BB(BB), SkippedIds(SkippedIds), OutputIds(OutputIds) {}
+  /// Because of const arguments, we have to override the assignment operator.
+  /// All these constant references are equal for every BB of set of equal BBs
   BBInfo &operator=(const BBInfo &Other);
 
   BasicBlock *getBB() const { return BB; }
@@ -323,6 +334,11 @@ public:
   const SmallVector<Value *, 8> &getInputs() const;
   const SmallVector<Instruction *, 8> &getOutputs() const;
 
+  /// permutates Inputs according to Permut
+  /// i.e:
+  /// Inputs: [0, 2, 3]
+  /// Permut: [2, 0, 1]
+  /// In result Input will be equal [3, 0, 2]
   void permutateInputs(const SmallVectorImpl<size_t> &Permut);
   Value *getReturnValue() const { return ReturnValue; }
   void extractReturnValue(const size_t ResultId);
@@ -392,21 +408,28 @@ BBInfo &BBInfo::operator=(const BBInfo &Other) {
 
 namespace {
 
+/// Common information about Basic Blocks
+/// Creates for every equal set of BBs
 class BBsCommonInfo {
 public:
   BBsCommonInfo(ArrayRef<BasicBlock *> BBs);
 
-  size_t getWeight() const { return Weight; }
   const BBInstIds &getOutputIds() const { return OutputIds; }
   const SmartSortedSet &getSkippedInsts() const { return SkippedInsts; }
 
 private:
+  /// merges exsistent output OutputIds with \p Ids
+  /// e.g.
+  /// OutputIds: [1, 3, 5]
+  /// \p Ids: [1, 2, 5 ]
+  /// in result OutputIds = [1, 2, 3, 5]
+  ///
   void mergeOutput(const BBInstIds &Ids);
+
+  /// Sets SkippedInsts, using instructions from \p BB
   void setSkippedInsts(BasicBlock *BB);
-  size_t calculateWeight(const BasicBlock *BB);
 
 private:
-  size_t Weight;
   BBInstIds OutputIds;
   SmartSortedSet SkippedInsts;
 };
@@ -420,8 +443,6 @@ BBsCommonInfo::BBsCommonInfo(ArrayRef<BasicBlock *> BBs)
   });
 
   setSkippedInsts(BBs.front());
-
-  Weight = calculateWeight(BBs.front());
 }
 
 void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
@@ -446,7 +467,7 @@ void BBsCommonInfo::mergeOutput(const BBInstIds &Ids) {
     OutputIds.insert(OutputIds.end(), IdsIt, IdsEIt);
 }
 
-/// \param I instruction, that is decided whether to be skipped
+/// \param I instruction, that is decided whether to be skipped or not
 /// \param AlreadySkipped array of already skipped instructions
 /// \param Outputs output instructions
 /// \return true if instruction will not be factored out in separate function
@@ -527,57 +548,8 @@ void BBsCommonInfo::setSkippedInsts(BasicBlock *BB) {
       AddSkippedInst(i, &*It);
     }
   }
+
   SkippedInsts.resetIt();
-}
-
-// TODO: ? make architecture-dependent weight calculation.
-//       e.g skip GetElementPtrInst for x86 arch
-/// Calculates Weight of basic block \p BB for further decisions
-size_t BBsCommonInfo::calculateWeight(const BasicBlock *BB) {
-
-  // approximate amount of instructions for the backend
-  // assume general case, sizes of all instructions are equal
-
-  size_t Points = 0;
-  size_t StoresAndLoads = 0;
-  size_t i = 0;
-  for (auto It = getBeginIt(BB), EIt = getEndIt(BB); It != EIt; ++It, ++i) {
-    if (SkippedInsts.contains(i))
-      continue;
-    // skip instructions, that can produce no code
-    if (isa<BitCastInst>(It) || isa<ICmpInst>(It))
-      continue;
-    if (isa<LoadInst>(It) || isa<StoreInst>(It)) {
-      ++StoresAndLoads;
-      continue;
-    }
-    if (const IntrinsicInst *Intr = dyn_cast<IntrinsicInst>(It)) {
-      using Intrinsic::ID;
-      static const std::set<Intrinsic::ID> NoCodeProduction = {
-          ID::lifetime_start,
-          ID::lifetime_end,
-          ID::donothing,
-          ID::invariant_start,
-          ID::invariant_end,
-          ID::invariant_group_barrier,
-          ID::var_annotation,
-          ID::ptr_annotation,
-          ID::annotation,
-          ID::dbg_declare,
-          ID::dbg_value,
-          ID::assume,
-          ID::instrprof_increment,
-          ID::instrprof_increment_step,
-          ID::instrprof_value_profile,
-          ID::pcmarker};
-
-      if (NoCodeProduction.count(Intr->getIntrinsicID()))
-        continue;
-    }
-
-    ++Points;
-  }
-  return Points + StoresAndLoads / 2 + StoresAndLoads % 2;
 }
 
 /// \return whether \p BB is able to throw
@@ -596,51 +568,15 @@ static bool canThrow(const BasicBlock *BB) {
   return false;
 }
 
-/// Decides, whether it is profitable to factor out BBs, creating no function
-/// \param Weight - basic block weight
-/// \param InputArgs - amount of input basic block arguments
-/// \param OutputArgs - amount of output basic block arguments
-/// \return true if profitable
-static bool isProfitableReplacement(const size_t Weight, const size_t InputArgs,
-                                    const size_t OutputArgs) {
-  const size_t AllocaOutputs = OutputArgs < 1 ? 0 : OutputArgs - 1;
-  if (ForceMerge)
-    return true;
-  size_t CallCost = 1 + 2 * AllocaOutputs + InputArgs;
-  return Weight > CallCost;
-}
-
-/// Decides, whether it is profitable to factor out BB, creating a function
-/// \param Weight - basic block weight
-/// \param BBAmount - amount of merging basic blocks
-/// \param InputArgs - amount of input basic block arguments
-/// \param OutputArgs - amount of output basic block arguments
-/// \return whether code size will reduce if factored with creating new function
-static bool shouldCreateFunction(const size_t Weight, const size_t BBAmount,
-                                 const size_t InputArgs,
-                                 const size_t OutputArgs) {
-  assert(BBAmount >= 2);
-  assert(isProfitableReplacement(Weight, InputArgs, OutputArgs) &&
-         "BBs with failed precheck of profitability shouldn't reach here");
-
-  if (ForceMerge)
-    return true;
-
-  const size_t CallCost = 1 + 2 * OutputArgs + InputArgs;
-  const size_t InstsProfitBy1Replacement = Weight - CallCost;
-  // count storing values for each output value and assume the worst case when
-  // we move values into convenient registers
-  const size_t FunctionCreationCost = Weight + 2 * OutputArgs + InputArgs;
-  // check if we don't lose created a function, and it's costs are lower,
-  // than total gain of function replacement
-  return BBAmount * InstsProfitBy1Replacement - FunctionCreationCost >= 0;
-}
-
 // TODO: ? set input attributes from created BB
 /// \param Info - Information about model basic block
 /// \return new function, that consists of Basic block \p Info BB
-static Function *createFuncFromBB(const BBInfo &Info,
-                                  const SmartSortedSet &SkippedInsts) {
+static Function *createFuncFromBB(const SmallVectorImpl<Instruction *> &Insts,
+                                  const BBInfo &Info) {
+  assert(!Insts.empty() && "Should not reach here");
+  assert(Insts.front()->getParent() == Info.getBB() &&
+         "Basic blocks not match");
+
   BasicBlock *BB = Info.getBB();
   auto &Input = Info.getInputs();
   auto &Output = Info.getOutputs();
@@ -710,14 +646,9 @@ static Function *createFuncFromBB(const BBInfo &Info,
   IRBuilder<> Builder(NewBB);
   Value *ReturnValueF = nullptr;
 
-  size_t i = 0;
-  SkippedInsts.checkBegin();
-  for (auto I = getBeginIt(BB), IE = getEndIt(BB); I != IE; ++I, ++i) {
-    if (SkippedInsts.contains(i)) {
-      continue;
-    }
+  for (auto I : Insts) {
     Instruction *NewI = Builder.Insert(I->clone());
-    InputToArgs.insert(std::make_pair(&*I, NewI));
+    InputToArgs.insert(std::make_pair(I, NewI));
 
     for (auto &Op : NewI->operands()) {
       auto it = InputToArgs.find(Op.get());
@@ -726,7 +657,7 @@ static Function *createFuncFromBB(const BBInfo &Info,
       }
     }
 
-    auto Found = OutputToArgs.find(&*I);
+    auto Found = OutputToArgs.find(I);
     if (Found != OutputToArgs.end()) {
       Builder.CreateStore(NewI, Found->second);
     } else if (&*I == ReturnValue) {
@@ -735,6 +666,8 @@ static Function *createFuncFromBB(const BBInfo &Info,
       ReturnValueF = NewI;
     }
   }
+
+  // create return instruction
   assert((ReturnValue == nullptr) == (ReturnValueF == nullptr) &&
          "Return value in basic block should be found, but it wasn't");
   if (ReturnValueF)
@@ -839,9 +772,9 @@ static bool replaceBBWithFunctionCall(const BBInfo &Info, Function *F,
 static size_t getFunctionRetValId(const ArrayRef<Instruction *> Outputs) {
   for (auto It = Outputs.rbegin(), EIt = Outputs.rend(); It != EIt; ++It) {
     Instruction *I = *It;
-    assert(!llvm::isa<AllocaInst>(I) && "Can't return stack variable");
+    assert(!llvm::isa<AllocaInst>(I) && "Alloca Can't be return value");
     if (I->getType()->isFirstClassType()) {
-      return It - Outputs.rbegin();
+      return Outputs.rend() - It - 1;
     }
   }
   return Outputs.size();
@@ -899,6 +832,28 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
   return i;
 }
 
+/// \return vector of instructions from \p BB
+/// with skipped \p Skipped instructions
+SmallVector<Instruction *, 16>
+extractActualInsts(BasicBlock *BB, const SmartSortedSet &Skipped) {
+  SmallVector<Instruction *, 16> Result;
+  auto It = getBeginIt(BB);
+  auto EIt = getEndIt(BB);
+  long BBSize = std::distance(It, EIt);
+  assert(BBSize > 0 && "Wrong iterator declaration");
+  assert(static_cast<size_t>(BBSize) >= Skipped.get().size() &&
+         "Bad Basic block should not reach here");
+  Result.reserve(static_cast<size_t>(BBSize) - Skipped.get().size());
+
+  Skipped.checkBegin();
+  for (size_t i = 0; It != EIt; ++It, ++i) {
+    if (Skipped.contains(i))
+      continue;
+    Result.push_back(&*It);
+  }
+  return Result;
+};
+
 /// Common steps of replacing equal basic blocks
 /// 1) Separate basic blocks by output values into sets of basic blocks
 /// and try to merge each of these sets with existing basic block
@@ -908,9 +863,9 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
 /// if it is profitable to replace them with newly-created function
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
-bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
+bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs,
+                          IDecisionMaker *DM) {
   assert(BBs.size() >= 2 && "No sence in merging");
-
   if (BBs.front()->size() <= 3) {
     debugPrint(BBs.front(), "Block family is too small to bother merging");
     return false;
@@ -921,18 +876,23 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   }
 
   BBsCommonInfo CommonInfo(BBs);
+  auto ExtractedBlock =
+      extractActualInsts(BBs.front(), CommonInfo.getSkippedInsts());
 
-  if (CommonInfo.getWeight() <= 2) {
+  DM->init(ExtractedBlock);
+
+  if (DM->isTiny()) {
     debugPrint(BBs.front(), "Block family is not worth merging");
     return false;
   }
+
   SmallVector<BBInfo, 8> BBInfos;
   BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts(),
                        CommonInfo.getOutputIds());
 
-  if (!isProfitableReplacement(CommonInfo.getWeight(),
-                               BBInfos.front().getInputs().size(),
-                               CommonInfo.getOutputIds().size())) {
+  if (!DM->replaceNoFunction(BBInfos.front().getInputs().size(),
+                             CommonInfo.getOutputIds().size())) {
+    debugPrint(BBs.front(), "BB factoring out won't decrease the code size");
     return false;
   }
 
@@ -968,9 +928,9 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
     }
   }
 
-  if (!shouldCreateFunction(CommonInfo.getWeight(), BBInfos.size(),
-                            BBInfos.front().getInputs().size(),
-                            CommonInfo.getOutputIds().size())) {
+  if (!DM->replaceWithFunction(BBInfos.size(),
+                               BBInfos.front().getInputs().size(),
+                               CommonInfo.getOutputIds().size())) {
     debugPrint(BBs.front(), "Unprofitable replacement");
     return false;
   }
@@ -978,7 +938,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs) {
   auto &Model = BBInfos.front();
   size_t ReturnIdF = getFunctionRetValId(Model.getOutputs());
   Model.extractReturnValue(ReturnIdF);
-  Function *F = createFuncFromBB(Model, CommonInfo.getSkippedInsts());
+  Function *F = createFuncFromBB(ExtractedBlock, Model);
 
   for (auto &Info : BBInfos) {
     // Model return value is already set
