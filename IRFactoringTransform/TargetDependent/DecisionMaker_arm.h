@@ -22,7 +22,7 @@
 class DecisionMaker_arm : public CommonDecisionMaker {
 public:
   virtual void
-  init(const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override;
+    init(const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override;
   virtual ~DecisionMaker_arm() {}
 };
 

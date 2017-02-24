@@ -21,8 +21,8 @@ std::unique_ptr<IDecisionMaker> IDecisionMaker::Create(const StringRef Arch) {
     return std::make_unique<CommonDecisionMaker>();
   if (Arch == "x86_64")
     return std::make_unique<DecisionMaker_x86_64>();
-  if (Arch == "arm")
-    return std::unique_ptr<DecisionMaker_arm>();
+  if (Arch.size() >= 3 && Arch.substr(0, 3) == "arm")
+    return std::make_unique<DecisionMaker_arm>();
 
   dbgs() << "Warning! Unknown architecture: " << Arch << "\n";
   dbgs() << "  For greater pass impact of code compaction, please, write a "

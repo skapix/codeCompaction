@@ -85,7 +85,7 @@ private:
   /// \param BBs - Vector of identity BBs
   /// \param DM - target-dependent subroutines
   /// \returns whether BBs were replaced with a function call
-  bool replace(const std::vector<BasicBlock *> &BBs, IDecisionMaker *DM);
+  bool replace(const SmallVectorImpl<BasicBlock *> &BBs, IDecisionMaker *DM);
 
   /// Comparator for BBNode
   class BBNodeCmp {
@@ -130,7 +130,7 @@ bool BBFactoring::runOnModule(Module &M) {
     }
   }
 
-  std::vector<std::vector<BasicBlock *>> IdenticalBlocksContainer;
+  std::vector<SmallVector<BasicBlock *, 16>> IdenticalBlocksContainer;
   auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   // merge hashed values into map
@@ -138,8 +138,7 @@ bool BBFactoring::runOnModule(Module &M) {
     auto InsertedBBNode = BBTree.insert(std::make_pair(
         BBNode(It->second, It->first), IdenticalBlocksContainer.size()));
     if (InsertedBBNode.second) {
-      IdenticalBlocksContainer.push_back(
-          std::vector<BasicBlock *>(1, It->second));
+      IdenticalBlocksContainer.emplace_back(1, It->second);
     } else {
       IdenticalBlocksContainer[InsertedBBNode.first->second].push_back(
           It->second);
@@ -152,6 +151,8 @@ bool BBFactoring::runOnModule(Module &M) {
       M.getTargetTriple().substr(0, M.getTargetTriple().find('-'));
   auto DM = ForceMerge ? make_unique<ForceMergeDecisionMaker>()
                        : IDecisionMaker::Create(Arch);
+  assert(DM.get() && "DM was not created properly");
+
   for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
     if (IdenticalBlocks.size() >= 2) {
       Changed |= replace(IdenticalBlocks, DM.get());
@@ -840,7 +841,7 @@ extractActualInsts(BasicBlock *BB, const SmartSortedSet &Skipped) {
   auto It = getBeginIt(BB);
   auto EIt = getEndIt(BB);
   long BBSize = std::distance(It, EIt);
-  assert(BBSize > 0 && "Wrong iterator declaration");
+  assert(BBSize > 0 && "Should not reach here");
   assert(static_cast<size_t>(BBSize) >= Skipped.get().size() &&
          "Bad Basic block should not reach here");
   Result.reserve(static_cast<size_t>(BBSize) - Skipped.get().size());
@@ -863,21 +864,30 @@ extractActualInsts(BasicBlock *BB, const SmartSortedSet &Skipped) {
 /// if it is profitable to replace them with newly-created function
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
-bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs,
+bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
                           IDecisionMaker *DM) {
   assert(BBs.size() >= 2 && "No sence in merging");
-  if (BBs.front()->size() <= 3) {
-    debugPrint(BBs.front(), "Block family is too small to bother merging");
+  if (BBs.front()->size() <= 3)
     return false;
-  }
+
   if (BBs.front()->isLandingPad()) {
     debugPrint(BBs.front(), "Block family is a landing pad. Skip it");
+    return false;
+  }
+
+  long BBsSize = std::distance(getBeginIt(BBs.front()), getEndIt(BBs.front()));
+  if (BBsSize <= 2) {
+    debugPrint(BBs.front(), "Block family is too small to bother merging");
     return false;
   }
 
   BBsCommonInfo CommonInfo(BBs);
   auto ExtractedBlock =
       extractActualInsts(BBs.front(), CommonInfo.getSkippedInsts());
+  if (ExtractedBlock.size() <= 2) {
+    debugPrint(BBs.front(), "Block family is unprofitable to be factored out");
+    return false;
+  }
 
   DM->init(ExtractedBlock);
 
@@ -931,7 +941,7 @@ bool BBFactoring::replace(const std::vector<BasicBlock *> &BBs,
   if (!DM->replaceWithFunction(BBInfos.size(),
                                BBInfos.front().getInputs().size(),
                                CommonInfo.getOutputIds().size())) {
-    debugPrint(BBs.front(), "Unprofitable replacement");
+    debugPrint(BBs.front(), "Unprofitable to factor out, creating a function");
     return false;
   }
 
