@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file contains Decision Maker(DM), that always allows to continue BB
+/// This file contains PAC implementation, that always allows to continue BB
 /// to factor out. It is used for BBFactor transform testing/debugging, i.e.
 /// when we need to merge all blocks, independently of the profitability.
 ///
@@ -17,24 +17,24 @@
 #ifndef LLVMTRANSFORM_FORCEMERGEDECISIONMAKER_H
 #define LLVMTRANSFORM_FORCEMERGEDECISIONMAKER_H
 
-#include "IDecisionMaker.h"
+#include "IProceduralAbstractionCost.h"
 
-/// DM is used when flag --bbfactor-force-merging is activated
-class ForceMergeDecisionMaker : public IDecisionMaker {
+/// PAC implementation is used when flag --bbfactor-force-merging is activated
+class ForceMergePAC : public IProceduralAbstractionCost {
 public:
   virtual void
-  init(const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override {}
+  init(const llvm::TargetTransformInfo &TTI,
+       const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override {}
   virtual bool isTiny() const override { return false; }
-  virtual bool replaceNoFunction(const size_t InputArgs,
-                                 const size_t OutputArgs) const override {
+  virtual bool replaceWithCall(const size_t InputArgs,
+                               const size_t OutputArgs) const override {
     return true;
   }
-  virtual bool replaceWithFunction(const size_t BBAmount,
-                                   const size_t InputArgs,
-                                   const size_t OutputArgs) const override {
+  virtual bool replaceWithCall(const size_t BBAmount, const size_t InputArgs,
+                               const size_t OutputArgs) const override {
     return true;
   }
-  virtual ~ForceMergeDecisionMaker() {}
+  virtual ~ForceMergePAC() {}
 };
 
 #endif // LLVMTRANSFORM_FORCEMERGEDECISIONMAKER_H

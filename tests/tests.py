@@ -31,7 +31,8 @@ def getFuncAmount(f):
 
 def checkFile(filename):
     assert getExt(filename) == ".ll", "Bad extension: " + getExt(filename)
-    assert os.path.exists(filename), "Path not exists: " + os.path.abspath(filename)
+    assert os.path.exists(filename), "Path not exists: " + \
+        os.path.abspath(filename)
 
     content0 = Path(filename).read_text()
     if not content0:
@@ -47,7 +48,8 @@ def checkFile(filename):
     return num1 - num0
 
 # end compare amount of functions utils
-# Tests perform query correctness to the opt and calculate amount of created functions
+# Tests perform query correctness to the opt and calculate amount of
+# created functions
 
 
 class TestCreatingFunctions(unittest.TestCase):
@@ -93,8 +95,8 @@ class TestCreatingFunctions(unittest.TestCase):
         self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
     def test_mergeUnusedOutput(self):
-            name = "mergeUnusedOutput.ll"
-            self.assertEqual(checkFile(g_testCasesDir + name), 0)
+        name = "mergeUnusedOutput.ll"
+        self.assertEqual(checkFile(g_testCasesDir + name), 0)
 
 # Tests perform ouput equality
 
@@ -110,8 +112,10 @@ def getLLiOutput(filename):
 
 class TestIdenticalOutput(unittest.TestCase):
     def checkFileCorrectness(self, filename):
-        assert getExt(filename) == ".ll" or getExt(filename) == ".ll", "Bad extension: " + getExt(filename)
-        assert os.path.exists(filename), "Path not exists: " + os.path.abspath(filename)
+        assert getExt(filename) == ".ll" or getExt(
+            filename) == ".ll", "Bad extension: " + getExt(filename)
+        assert os.path.exists(filename), "Path not exists: " + \
+            os.path.abspath(filename)
 
         tmpFile = tempfile.mkstemp()[1]
         atexit.register(postCheck, tmpFile)
@@ -154,7 +158,6 @@ class TestIdenticalOutput(unittest.TestCase):
     def test_mergeUnusedOutput(self):
         self.checkFileCorrectness(g_testCasesDir + "/mergeUnusedOutput.ll")
 
-        
 
 if __name__ == '__main__':
     unittest.main()

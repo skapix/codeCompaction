@@ -23,9 +23,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "../external/merging.h"
-#include "ForceMergeDecisionMaker.h"
-#include "TargetDependent/CommonDecisionMaker.h"
+#include "ForceMergePAC.h"
+#include "TargetDependent/CommonPAC.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -46,6 +47,7 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
+// TODO: clone free instructions for sweeping them from output
 // TODO: ? place BB comparing in this file
 
 namespace {
@@ -77,7 +79,9 @@ public:
 
   BBFactoring() : ModulePass(ID) {}
 
-  bool runOnModule(Module &M) override;
+  virtual void getAnalysisUsage(AnalysisUsage &Info) const override;
+
+  virtual bool runOnModule(Module &M) override;
 
 private:
   /// If profitable, creates function with body of BB and replaces BBs
@@ -85,7 +89,8 @@ private:
   /// \param BBs - Vector of identity BBs
   /// \param DM - target-dependent subroutines
   /// \returns whether BBs were replaced with a function call
-  bool replace(const SmallVectorImpl<BasicBlock *> &BBs, IDecisionMaker *DM);
+  bool replace(const SmallVectorImpl<BasicBlock *> &BBs,
+               IProceduralAbstractionCost *DM);
 
   /// Comparator for BBNode
   class BBNodeCmp {
@@ -111,6 +116,10 @@ private:
 char BBFactoring::ID = 0;
 static RegisterPass<BBFactoring> X("bbfactor", "BBFactoring Pass", false,
                                    false);
+
+void BBFactoring::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<TargetTransformInfoWrapperPass>();
+}
 
 bool BBFactoring::runOnModule(Module &M) {
   if (skipModule(M))
@@ -149,8 +158,8 @@ bool BBFactoring::runOnModule(Module &M) {
 
   const StringRef Arch =
       M.getTargetTriple().substr(0, M.getTargetTriple().find('-'));
-  auto DM = ForceMerge ? make_unique<ForceMergeDecisionMaker>()
-                       : IDecisionMaker::Create(Arch);
+  auto DM = ForceMerge ? make_unique<ForceMergePAC>()
+                       : IProceduralAbstractionCost::Create(Arch);
   assert(DM.get() && "DM was not created properly");
 
   for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
@@ -514,11 +523,11 @@ static bool skipInst(const Instruction *I,
   // to be an output => alloca instruction should be factored out
   if (auto *BBAlloca = dyn_cast<AllocaInst>(I)) {
     for (auto BBAllocaUser : BBAlloca->users()) {
-      if (!isa<Instruction>(BBAllocaUser))
+      const Instruction *BBAllocaInst = dyn_cast<Instruction>(BBAllocaUser);
+      if (!BBAllocaInst)
         continue;
 
-      const Instruction *I = cast<Instruction>(BBAllocaUser);
-      if (I->getParent() == BB &&
+      if (BBAllocaInst->getParent() == BB &&
           (find(Outputs, BBAllocaUser) != Outputs.end())) {
         return true;
       }
@@ -833,6 +842,25 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
   return i;
 }
 
+bool beforeReturnBaseBlock(const BasicBlock *BB, const Value *OutputVal) {
+  auto CheckReturn = [OutputVal](const ReturnInst *RI) {
+    return OutputVal == RI->getReturnValue() ||
+           RI->getReturnValue()->getType()->getTypeID() == Type::VoidTyID;
+  };
+  // codegen generates better code,
+  // when the call is in tail position (ret immediately follows call
+  // and ret uses value of call or is void).
+  if (auto ImmediateRI = dyn_cast<ReturnInst>(&BB->back()))
+    return CheckReturn(ImmediateRI);
+
+  auto Br = dyn_cast<BranchInst>(&BB->back());
+  if (!Br || !Br->isUnconditional())
+    return false;
+  auto NextBB = Br->getSuccessor(0);
+  auto Ret = dyn_cast<ReturnInst>(&NextBB->front());
+  return Ret && CheckReturn(Ret);
+}
+
 /// \return vector of instructions from \p BB
 /// with skipped \p Skipped instructions
 SmallVector<Instruction *, 16>
@@ -865,7 +893,7 @@ extractActualInsts(BasicBlock *BB, const SmartSortedSet &Skipped) {
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
 bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
-                          IDecisionMaker *DM) {
+                          IProceduralAbstractionCost *DM) {
   assert(BBs.size() >= 2 && "No sence in merging");
   if (BBs.front()->size() <= 3)
     return false;
@@ -889,7 +917,10 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
     return false;
   }
 
-  DM->init(ExtractedBlock);
+  auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(
+      *BBs.front()->getParent());
+
+  DM->init(TTI, ExtractedBlock);
 
   if (DM->isTiny()) {
     debugPrint(BBs.front(), "Block family is not worth merging");
@@ -897,20 +928,27 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
   }
 
   SmallVector<BBInfo, 8> BBInfos;
-  BBInfos.emplace_back(BBs.front(), CommonInfo.getSkippedInsts(),
-                       CommonInfo.getOutputIds());
+  transform(BBs, std::back_inserter(BBInfos),
+            [&BBInfos, &CommonInfo](BasicBlock *BB) {
+              return BBInfo(BB, CommonInfo.getSkippedInsts(),
+                            CommonInfo.getOutputIds());
+            });
 
-  if (!DM->replaceNoFunction(BBInfos.front().getInputs().size(),
-                             CommonInfo.getOutputIds().size())) {
+  // check for tail call
+  bool IsReallyTail =
+      CommonInfo.getOutputIds().size() <= 1 &&
+      all_of(BBInfos, [](const BBInfo &Info) {
+        const Value *OutputValue =
+            Info.getOutputs().size() == 1 ? Info.getOutputs().front() : nullptr;
+        return beforeReturnBaseBlock(Info.getBB(), OutputValue);
+      });
+  DM->setTail(IsReallyTail);
+
+  if (!DM->replaceWithCall(BBInfos.front().getInputs().size(),
+                           CommonInfo.getOutputIds().size())) {
     debugPrint(BBs.front(), "BB factoring out won't decrease the code size");
     return false;
   }
-
-  std::for_each(BBs.begin() + 1, BBs.end(),
-                [&BBInfos, &CommonInfo](BasicBlock *BB) {
-                  BBInfos.emplace_back(BB, CommonInfo.getSkippedInsts(),
-                                       CommonInfo.getOutputIds());
-                });
 
   // Try to find suitable for merging function
   // If basic block has more, than 1 output, function can not be found
@@ -938,9 +976,8 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
     }
   }
 
-  if (!DM->replaceWithFunction(BBInfos.size(),
-                               BBInfos.front().getInputs().size(),
-                               CommonInfo.getOutputIds().size())) {
+  if (!DM->replaceWithCall(BBInfos.size(), BBInfos.front().getInputs().size(),
+                           CommonInfo.getOutputIds().size())) {
     debugPrint(BBs.front(), "Unprofitable to factor out, creating a function");
     return false;
   }

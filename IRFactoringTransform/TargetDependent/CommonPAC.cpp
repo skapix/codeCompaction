@@ -1,4 +1,4 @@
-//===-- TargetDependent/CommonDecisionMaker.cpp - Common utils---*- C++ -*-===//
+//===-- TargetDependent/CommonPAC.cpp - Common size utils---*- C++ -*------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -9,59 +9,71 @@
 ///
 /// \file
 /// This file contains auxiliary target-independent information about
-/// factoring out BBs. These decision maker (DM) is used, when no appropriate DM
+/// factoring out BBs. This PAC is used, when no appropriate PAC
 /// was found or module contains no information about its target
 ///
 //===----------------------------------------------------------------------===//
-#include "CommonDecisionMaker.h"
-#include <cstddef>
-#include <llvm/IR/Instruction.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/IR/IntrinsicInst.h>
-#include <llvm/Support/Debug.h>
+#include "CommonPAC.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include <set>
 
 using namespace llvm;
 
-void CommonDecisionMaker::init(const SmallVectorImpl<Instruction *> &Insts) {
+// TODO: handle call insts in a special way
+void CommonPAC::init(const TargetTransformInfo &TTI,
+                     const SmallVectorImpl<Instruction *> &Insts) {
+  this->TTI = &TTI;
   BlockWeight = 0;
   for (Instruction *I : Insts) {
-    if (isCommonlySkippedInstruction(I))
+    if (isSkippedInstruction(TTI, I))
       continue;
+    if (auto CI = dyn_cast<CallInst>(I)) {
+      BlockWeight += getFunctionCallWeight(*CI);
+    }
     ++BlockWeight;
   }
 }
 
-bool CommonDecisionMaker::isTiny() const { return BlockWeight <= 2; }
+bool CommonPAC::isTiny() const { return BlockWeight <= 2; }
 
-bool CommonDecisionMaker::replaceNoFunction(const size_t InputArgs,
-                                            const size_t OutputArgs) const {
-  return getNewBlockWeight(InputArgs, OutputArgs) < getOriginalBlockWeight();
+bool CommonPAC::replaceWithCall(const size_t InputArgs,
+                                const size_t OutputArgs) const {
+  auto OriginalBlockWeight = getOriginalBlockWeight();
+  return (IsTail && 1 < OriginalBlockWeight) ||
+         (getNewBlockWeight(InputArgs, OutputArgs) < OriginalBlockWeight);
 }
 
-bool CommonDecisionMaker::replaceWithFunction(const size_t BBAmount,
-                                              const size_t InputArgs,
-                                              const size_t OutputArgs) const {
+bool CommonPAC::replaceWithCall(const size_t BBAmount, const size_t InputArgs,
+                                const size_t OutputArgs) const {
   assert(BBAmount >= 2);
-  assert(replaceNoFunction(InputArgs, OutputArgs) &&
+  assert(replaceWithCall(InputArgs, OutputArgs) &&
          "BBs with failed precheck of profitability shouldn't reach here");
+  if (IsTail) {
+    return true;
+  }
 
   const size_t OldCost = getOriginalBlockWeight();
   const size_t NewBlockCost = getNewBlockWeight(InputArgs, OutputArgs);
-  const size_t InstsProfitBy1Replacement =  OldCost - NewBlockCost;
-  const size_t FunctionCreationCost = getFunctionCreationWeight(InputArgs,
-                                                                OutputArgs);
+  const size_t InstsProfitBy1Replacement = OldCost - NewBlockCost;
+  const size_t FunctionCreationCost =
+      getFunctionCreationWeight(InputArgs, OutputArgs);
 
   // check if we don't lose created a function, and it's costs are lower,
   // than total gain of function replacement
   return BBAmount * InstsProfitBy1Replacement > FunctionCreationCost;
 }
 
-CommonDecisionMaker::~CommonDecisionMaker() {}
+CommonPAC::~CommonPAC() {}
 
+bool CommonPAC::isSkippedInstruction(const TargetTransformInfo &TTI,
+                                     const llvm::Instruction *I) {
 
-bool CommonDecisionMaker::isCommonlySkippedInstruction(
-  const llvm::Instruction *I) {
+  if (TTI.getUserCost(I) == TargetTransformInfo::TCC_Free)
+    return true;
+
   if (isa<BitCastInst>(I))
     return true;
 
@@ -71,18 +83,8 @@ bool CommonDecisionMaker::isCommonlySkippedInstruction(
 
   using Intrinsic::ID;
   static const std::set<Intrinsic::ID> NoCodeProduction = {
-      ID::lifetime_start,
-      ID::lifetime_end,
       ID::donothing,
-      ID::invariant_start,
-      ID::invariant_end,
       ID::invariant_group_barrier,
-      ID::var_annotation,
-      ID::ptr_annotation,
-      ID::annotation,
-      ID::dbg_declare,
-      ID::dbg_value,
-      ID::assume,
       ID::instrprof_increment,
       ID::instrprof_increment_step,
       ID::instrprof_value_profile,
@@ -91,9 +93,8 @@ bool CommonDecisionMaker::isCommonlySkippedInstruction(
   return NoCodeProduction.count(Intr->getIntrinsicID()) > 0;
 }
 
-
-size_t CommonDecisionMaker::getNewBlockWeight(const size_t InputArgs,
-                                              const size_t OutputArgs) const {
+size_t CommonPAC::getNewBlockWeight(const size_t InputArgs,
+                                    const size_t OutputArgs) const {
   const size_t AllocaOutputs = OutputArgs > 0 ? OutputArgs - 1 : 0;
   const bool HasAlloca = AllocaOutputs > 0;
   // call cost is calculated in the following way:
@@ -105,15 +106,17 @@ size_t CommonDecisionMaker::getNewBlockWeight(const size_t InputArgs,
   return 1 + HasAlloca + InputArgs + 2 * AllocaOutputs;
 }
 
-size_t CommonDecisionMaker::getOriginalBlockWeight() const {
-  return BlockWeight;
-}
+size_t CommonPAC::getOriginalBlockWeight() const { return BlockWeight; }
 
-size_t CommonDecisionMaker::getFunctionCreationWeight(const size_t InputArgs,
-                                                      const size_t OutputArgs) const {
+size_t CommonPAC::getFunctionCreationWeight(const size_t InputArgs,
+                                            const size_t OutputArgs) const {
   const size_t OutputStores = OutputArgs > 0 ? OutputArgs - 1 : 0;
   // count storing values for each output value and assume the worst case when
   // we move values into convenient registers
   // don't forget about return instruction
   return BlockWeight + OutputStores + 1;
+}
+
+size_t CommonPAC::getFunctionCallWeight(const llvm::CallInst &Inst) {
+  return 1 + Inst.getNumArgOperands();
 }
