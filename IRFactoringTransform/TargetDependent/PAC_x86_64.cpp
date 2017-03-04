@@ -8,8 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "PAC_x86_64.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Instructions.h"
 
 using namespace llvm;
 
@@ -63,7 +63,6 @@ void PAC_x86_64::init(const TargetTransformInfo &TTI,
 
   BlockWeight = 0;
   HasAlloca = false;
-  size_t HalfWeight = 0;
   for (auto It = Insts.begin(), EIt = Insts.end(); It != EIt; ++It) {
     size_t Cost = getCombinedCost(It, EIt);
     if (Cost) {
@@ -80,21 +79,12 @@ void PAC_x86_64::init(const TargetTransformInfo &TTI,
       break;
     case Instruction::Call:
       BlockWeight += getFunctionCallWeight(cast<CallInst>(*I));
-    // case Instruction::GetElementPtr:
-    // GEP is usually not used in MC, because of relative addressing in x86-64
-    //   break;
-
-    // Heuristics
-    // case Instruction::Load:
-    // case Instruction::Store:
-    //  ++HalfWeight;
-    // break;
+      break;
     default:
       ++BlockWeight;
     }
   }
 
-  BlockWeight += (HalfWeight + 1) / 2;
   IsLastCmp = Insts.back()->getOpcode() == Instruction::ICmp;
 }
 
@@ -104,7 +94,13 @@ bool PAC_x86_64::isTiny() const {
 
 size_t PAC_x86_64::getNewBlockWeight(const size_t InputArgs,
                                      const size_t OutputArgs) const {
-  return CommonPAC::getNewBlockWeight(InputArgs, OutputArgs) + IsLastCmp;
+  const size_t AllocaOutputs = OutputArgs > 0 ? OutputArgs - 1 : 0;
+  const bool HasAlloca = AllocaOutputs > 0;
+  const size_t AmountPenalty =
+      InputArgs + AllocaOutputs <= 4 ? 0 : InputArgs + AllocaOutputs - 4;
+
+  return 1 + HasAlloca + InputArgs + 2 * AllocaOutputs + 2 * AmountPenalty +
+         IsLastCmp;
 }
 
 size_t PAC_x86_64::getOriginalBlockWeight() const {
@@ -118,4 +114,29 @@ size_t PAC_x86_64::getFunctionCreationWeight(const size_t InputArgs,
   // It is used because usually additional instruction is added: sete %al
   return CommonPAC::getFunctionCreationWeight(InputArgs, OutputArgs) +
          HasAlloca * 2 + IsLastCmp;
+}
+
+size_t PAC_x86_64::getFunctionCallWeight(const llvm::CallInst &Inst) {
+  auto Sz = TTI->getUserCost(&Inst);
+  if (Sz == TargetTransformInfo::TCC_Free)
+    return 0;
+  else if (Sz == TargetTransformInfo::TCC_Basic)
+    return 1;
+
+  size_t OperandStores = 0;
+
+  for (auto &Op : Inst.arg_operands()) {
+    auto I = dyn_cast<Instruction>(Op.get());
+    if (!I) {
+      ++OperandStores;
+      continue;
+    }
+
+    // skip these because of lea instruction was already counted
+    if (isa<LoadInst>(I) && I->getParent() == Inst.getParent())
+      continue;
+    ++OperandStores;
+  }
+
+  return 1 + OperandStores;
 }

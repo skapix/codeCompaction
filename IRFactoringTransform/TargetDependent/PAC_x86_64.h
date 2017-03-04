@@ -36,6 +36,7 @@ public:
   virtual ~PAC_x86_64() {}
 
 private:
+  size_t getFunctionCallWeight(const llvm::CallInst &Inst);
   virtual bool isTiny() const override;
 
 private:

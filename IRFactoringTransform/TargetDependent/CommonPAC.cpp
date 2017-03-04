@@ -96,14 +96,12 @@ bool CommonPAC::isSkippedInstruction(const TargetTransformInfo &TTI,
 size_t CommonPAC::getNewBlockWeight(const size_t InputArgs,
                                     const size_t OutputArgs) const {
   const size_t AllocaOutputs = OutputArgs > 0 ? OutputArgs - 1 : 0;
-  const bool HasAlloca = AllocaOutputs > 0;
   // call cost is calculated in the following way:
-  // 1 for the call function, store input args in register(stack),
-  // ContainsOutput for allocating space (consider the worst case)
-  // AllocaOutputs multiplied by 2, because:
+  // 1 for the call function, N for storing input args in register(stack),
+  // AllocaOutputs is multiplied by 2, because:
   //  1) move address to appropriate register (or push)
   //  2) after call extract value from allocated space
-  return 1 + HasAlloca + InputArgs + 2 * AllocaOutputs;
+  return 1 + InputArgs + 2 * AllocaOutputs;
 }
 
 size_t CommonPAC::getOriginalBlockWeight() const { return BlockWeight; }
