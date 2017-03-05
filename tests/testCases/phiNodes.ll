@@ -1,5 +1,8 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
+; CHECK-LABEL: @foo
 define i32 @foo(i32 %i1) {
 entry:
   %cmp1 = icmp sgt i32 %i1, 0
@@ -15,6 +18,10 @@ less.zero:
   br label %body
 
 body:
+; CHECK: phi i32
+; CHECK-NEXT: phi i32
+; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName:@[_\.a-z0-9]+]]
+; CHECK-NEXT: ret
   %phi1 = phi i32 [ %g.a, %greater.zero ], [ %l.a, %less.zero ]
   %phi2 = phi i32 [ %g.b, %greater.zero ], [ %l.b, %less.zero ]
   %someCalc1 = add nsw i32 %phi1, %phi2
@@ -25,6 +32,7 @@ body:
   ret i32 %someCalc5
 }
 
+; CHECK-LABEL: @bar
 define i32 @bar(i32 %i0) {
 entry:
   %cmp1 = icmp sge i32 %i0, 0
@@ -40,6 +48,10 @@ less.zero:
   br label %body
 
 body:
+; CHECK: phi i32
+; CHECK-NEXT: phi i32
+; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName:@[_\.a-z0-9]+]]
+; CHECK-NEXT: ret
   %phi1 = phi i32 [ %g.a, %greater.zero ], [ %l.a, %less.zero ]
   %phi2 = phi i32 [ %g.b, %greater.zero ], [ %l.b, %less.zero ]
   %someCalc1 = add nsw i32 %phi1, %phi2
@@ -59,3 +71,5 @@ define i32 @main() {
 }
 
 declare i32 @printf(i8*, ...)
+
+; CHECK: i32 [[FName]]

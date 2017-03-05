@@ -1,3 +1,5 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 @g_globalValue = local_unnamed_addr global i32 0, align 4
 
@@ -15,6 +17,7 @@ entry:
 }
 
 
+; CHECK-LABEL: @bar
 define i32 @bar(i32 %i) {
 entry:
   %cmp = icmp slt i32 %i, 0
@@ -27,6 +30,7 @@ if.then:
   br label %if.end
 
 if.end: 
+; CHECK: call i32 @foo(i32 %i)
   %someCalc1 = mul nsw i32 %i, %i
   %someCalc2 = mul nsw i32 %i, %someCalc1
   %someCalc3 = add nsw i32 %someCalc2, %someCalc1

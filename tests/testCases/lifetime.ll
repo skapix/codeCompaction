@@ -1,3 +1,5 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+
 %struct.S = type { i32, i8, %struct.S* }
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
@@ -7,6 +9,7 @@ entry:
 }
 
 define i32 @foo(i32 %i) {
+; CHECK-LABEL: @foo
 entry:
   %s = alloca %struct.S, align 8
   %0 = bitcast %struct.S* %s to i8*
@@ -23,6 +26,14 @@ entry:
   %dummy1 = add i32 %i, 0
   %cmp = icmp slt i32 %i, 0
   br i1 %cmp, label %if.then, label %if.end
+
+; CHECK: [[Al:%[_\.a-z0-9]+]] = alloca %struct.S
+; CHECK-NEXT: [[BC:%[_\.a-z0-9]+]] = bitcast %struct.S* [[Al]] to i8*
+; CHECK-NEXT: call void @llvm.lifetime.start(i64 {{[0-9]+}}, i8* nonnull [[BC]])
+; Decide what to do with GEPInsts
+; CHECK: call{{[a-z ]*}} i1  [[FName:@[_\.a-z0-9]+]]
+; CHECK-NEXT: br
+;  %0 = bitcast %struct.S* %s to i8*
 
 if.then:
   %1 = load i8, i8* %c, align 4
@@ -46,6 +57,7 @@ declare void @llvm.lifetime.start(i64, i8* nocapture)
 declare void @llvm.lifetime.end(i64, i8* nocapture)
 
 define i32 @bar(i32 %i) local_unnamed_addr {
+; CHECK-LABEL: @bar
 entry:
   %s = alloca %struct.S, align 8
   %0 = bitcast %struct.S* %s to i8*
@@ -62,6 +74,8 @@ entry:
   %dummy1 = add i32 %i, 0
   %cmp = icmp slt i32 %i, 0
   br i1 %cmp, label %if.then, label %if.end
+
+; CHECK: call{{[a-z ]*}} i1  [[FName]]
 
 if.then:
   %1 = load i8, i8* %c, align 4
@@ -89,5 +103,6 @@ entry:
   ret i32 0
 }
 
-declare i32 @printf(i8* nocapture readonly, ...)
+; CHECK: define private {{[a-z]*}} i1 [[FName]](
 
+declare i32 @printf(i8* nocapture readonly, ...)

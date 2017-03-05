@@ -10,6 +10,7 @@ g_lli = "lli"
 g_link = "llvm-link"
 
 g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
+g_testPath = os.path.dirname(os.path.abspath(__file__)) + "/testCases"
 
 # function identificator
 g_startStrIdent = "define "
@@ -18,6 +19,7 @@ g_identLen = len(g_startStrIdent)
 g_armInclude = "/usr/arm-none-eabi/include/"
 g_armIncludeCpp1 = g_armInclude + "c++/6.3.0/"
 g_armIncludeCpp2 = g_armIncludeCpp1 + "arm-none-eabi/"
+
 
 class CompileInfo:
     def __init__(self, program, defaultArgs, outputExt):

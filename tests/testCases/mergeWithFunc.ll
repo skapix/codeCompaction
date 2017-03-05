@@ -1,3 +1,5 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
 define i32 @foo(i32 %i, i32 %j, i32 %k) {
@@ -10,12 +12,14 @@ entry:
   ret i32 %mul4
 }
 
+; CHECK-LABEL: @bar
 define i32 @bar(i32 %i, i32 %j, i32 %k) {
 entry:
   %cmp = icmp slt i32 %i, 0
   br i1 %cmp, label %if.then, label %return
 
 if.then:
+  ; CHECK: call i32 @foo(i32 %j, i32 %i, i32 %k)
   %mul = mul nsw i32 %k, %i
   %mul1 = mul nsw i32 %j, 5
   %add = add nuw nsw i32 %mul1, %mul

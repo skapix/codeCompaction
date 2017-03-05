@@ -1,3 +1,6 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+; check, that it optimizes without errors
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
 define i32 @foo(i32 %i) {

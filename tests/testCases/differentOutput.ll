@@ -1,41 +1,38 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
+; CHECK-LABEL: @foo
 define i32 @foo(i32 %k) {
 entry:
+; CHECK: [[P0:%[_\.a-z0-9]+]] = alloca i32
+; CHECK-NEXT: call{{[a-z ]*}} i32  [[FName:@[_\.a-z0-9]+]](i32 %k, i32* [[P0]])
+; CHECK-NEXT: load i32, i32* [[P0]]
   %someCalc1 = add nsw i32 %k, 31
   %someCalc2 = mul nsw i32 %someCalc1, 5
   %someCalc3 = add nsw i32 %someCalc1, %someCalc2
   %someCalc4 = add nsw i32 %someCalc3, %someCalc3
-  %cmp = icmp eq i32 %someCalc4, 10
-  br i1 %cmp, label %cleanup, label %if.end
-
+  br label %if.end
 if.end:
-  %cmp4 = icmp eq i32 %someCalc3, 2
-  %mul = mul nsw i32 %k, 3
-  %res = select i1 %cmp4, i32 %mul, i32 %someCalc3
+  %res = mul nsw i32 %someCalc3, %someCalc4
   ret i32 %res
-
-cleanup:
-  ret i32 %k
 }
 
+  ; CHECK-LABEL: @bar
 define i32 @bar(i32 %k) {
 entry:
+; CHECK: [[P10:%[_\.a-z0-9]+]] = alloca i32
+; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName]](i32 %k, i32* [[P10]])
   %someCalc1 = add nsw i32 %k, 31
   %someCalc2 = mul nsw i32 %someCalc1, 5
   %someCalc3 = add nsw i32 %someCalc1, %someCalc2
   %someCalc4 = add nsw i32 %someCalc3, %someCalc3
-  %cmp = icmp eq i32 %someCalc4, 10
-  br i1 %cmp, label %cleanup, label %if.end
+  br label %if.end
+
 
 if.end:
-  %cmp4 = icmp eq i32 %someCalc3, 3
-  %mul = mul nsw i32 %k, 10
-  %res = select i1 %cmp4, i32 %mul, i32 %someCalc3
+  %res = mul nsw i32 3, %someCalc4
   ret i32 %res
-
-cleanup:
-  ret i32 %someCalc2
 }
 
 define i32 @main() {
@@ -47,3 +44,5 @@ define i32 @main() {
 }
 
 declare i32 @printf(i8*, ...)
+
+; CHECK: define private {{[a-z]*}} i32 [[FName]](i32{{[0-9a-z]*}}, i32*

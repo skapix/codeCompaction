@@ -1,3 +1,6 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+; check, that it optimizes without errors
+
 %"class.std::exception" = type { i32 (...)** }
 
 @_ZTISt9exception = external constant i8*

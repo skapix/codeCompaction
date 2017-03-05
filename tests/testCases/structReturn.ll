@@ -1,9 +1,14 @@
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
 %struct.S = type { i32, i8, %struct.S* }
 
+; CHECK-LABEL: @foo
 define i32 @foo(i32 %i) {
 entry:
+; CHECK: alloca
+; CHECK: call{{[a-z ]*}} void [[FName:@[_\.a-z0-9]+]]
   %s = alloca %struct.S, align 8
   %k = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 0
   store i32 10, i32* %k, align 8
@@ -25,8 +30,11 @@ cleanup:
   ret i32 %.call
 }
 
+; CHECK-LABEL: @bar
 define i32 @bar(i32 %i) {
 entry:
+; CHECK: alloca
+; CHECK: call{{[a-z ]*}} void [[FName]]
   %s = alloca %struct.S, align 8
   %k = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 0
   store i32 10, i32* %k, align 8
@@ -57,3 +65,6 @@ define i32 @main() {
 }
 
 declare i32 @printf(i8*, ...)
+
+; CHECK: i32 [[FName]]
+; CHECK-NOT: alloca

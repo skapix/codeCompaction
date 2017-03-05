@@ -1,8 +1,12 @@
 Before running tests or any utility, make sure, that the path for bbfactoring library is set correctly in utilities/constants.py (variable g_loadOptimization)
 
 ####tests.py
-Simple tests, that check whether blocks were factored
+Simple tests, that run lli to check output equality of  modules
 Run: ./tests.py
+
+####lit.cfg
+Config suite for LIT. For running, LLVM utils should be installed (FileCheck, lit)
+Run: lit testCases
 
 ####compare.py
 Auxiliary utility for comparing sizes of factored and non-factored object files for arm and x64 architecture
