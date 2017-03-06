@@ -1,4 +1,5 @@
 ; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+; RUN: %lli_comp -v %s
 
 %struct.S = type { i32, i8, %struct.S* }
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1

@@ -1,5 +1,6 @@
-; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
 ; check, that it optimizes without errors
+; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+; RUN: %lli_comp -v %s
 
 @.str = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
