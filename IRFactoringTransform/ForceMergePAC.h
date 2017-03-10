@@ -22,9 +22,10 @@
 /// PAC implementation is used when flag --bbfactor-force-merging is activated
 class ForceMergePAC : public IProceduralAbstractionCost {
 public:
-  virtual void
-  init(const llvm::TargetTransformInfo &TTI,
-       const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override {}
+  virtual void init(const llvm::TargetTransformInfo &TTI,
+                    const InstructionLocation &I,
+                    const llvm::BasicBlock::const_iterator &Begin,
+                    const llvm::BasicBlock::const_iterator &End) override {}
   virtual bool isTiny() const override { return false; }
   virtual bool replaceWithCall(const size_t InputArgs,
                                const size_t OutputArgs) const override {

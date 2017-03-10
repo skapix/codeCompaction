@@ -18,6 +18,7 @@
 #define LLVMTRANSFORM_IDECISIONMAKER_H
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/BasicBlock.h>
 #include <memory>
 
 namespace llvm {
@@ -25,6 +26,12 @@ class TargetTransformInfo;
 class Instruction;
 template <typename T> class SmallVectorImpl;
 } // namespace llvm
+
+class InstructionLocation {
+public:
+  virtual bool isUsedInsideFunction(const size_t i) const = 0;
+  virtual bool isUsedOutsideFunction(const size_t i) const = 0;
+};
 
 /// Interface's main aim is to aproximately calculate whether
 /// we get any profit by factoring out the BB.
@@ -41,9 +48,10 @@ public:
 
   /// Initialize decision maker with instructions \p Insts,
   /// that are going to be factored out
-  virtual void
-  init(const llvm::TargetTransformInfo &TTI,
-       const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) = 0;
+  virtual void init(const llvm::TargetTransformInfo &TTI,
+                    const InstructionLocation &IL,
+                    const llvm::BasicBlock::const_iterator &Begin,
+                    const llvm::BasicBlock::const_iterator &End) = 0;
 
   void setTail(const bool IsReallyTail);
 

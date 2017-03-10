@@ -304,7 +304,7 @@ convertInstIds(BasicBlock *BB, const BBInstIdsImpl &NumsInstr) {
 
 /// Class intends to handle special instruction indicies that are not going to
 /// be factored out
-class SpecialInstsIds {
+class SpecialInstsIds : public InstructionLocation {
 public:
   enum class Type : char {
     Usual,
@@ -325,7 +325,7 @@ public:
            SpecialInsts[Id] == Type::MoveBefore;
   }
 
-  bool isUsedInFunction(const size_t Id) const {
+  virtual bool isUsedInsideFunction(const size_t Id) const override {
     return SpecialInsts[Id] == Type::Usual ||
            SpecialInsts[Id] == Type::CopyBefore ||
            SpecialInsts[Id] == Type::CopyAfter;
@@ -334,6 +334,9 @@ public:
   bool isUsedAfterFunction(const size_t Id) const {
     return SpecialInsts[Id] == Type::CopyAfter ||
            SpecialInsts[Id] == Type::MoveAfter;
+  }
+  virtual bool isUsedOutsideFunction(const size_t Id) const override {
+    return !isUsual(Id);
   }
 
   const Type &operator[](const size_t i) const { return SpecialInsts[i]; }
@@ -592,7 +595,7 @@ void BBsCommonInfo::setSpecialInsts(const TargetTransformInfo &TTI,
     --RIt;
     --i;
 
-    if (!SpecialInsts.isUsedInFunction(i))
+    if (!SpecialInsts.isUsedInsideFunction(i))
       continue;
 
     if (UsedValues.find(&*RIt) == UsedValues.end()) {
@@ -700,7 +703,7 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB,
 
   size_t InstNum = 0;
   for (auto I = getBeginIt(BB), IE = getEndIt(BB); I != IE; ++I, ++InstNum) {
-    if (!SpecialInsts.isUsedInFunction(InstNum)) {
+    if (!SpecialInsts.isUsedInsideFunction(InstNum)) {
       continue;
     }
 
@@ -874,7 +877,7 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   size_t i = 0;
   for (auto It = getBeginIt(BB), EIt = getEndIt(BB); It != EIt; ++It, ++i) {
     Instruction *I = &*It;
-    if (!SpecialInsts.isUsedInFunction(i))
+    if (!SpecialInsts.isUsedInsideFunction(i))
       continue;
 
     Instruction *NewI = Builder.Insert(I->clone());
@@ -1093,24 +1096,6 @@ static bool beforeReturnBaseBlock(const BasicBlock *BB,
   return Ret && CheckReturn(Ret);
 }
 
-/// \return vector of instructions from \p BB
-/// with skipped \p Skipped instructions
-static SmallVector<Instruction *, 16>
-extractActualInsts(BasicBlock *BB, const SpecialInstsIds &Special) {
-  SmallVector<Instruction *, 16> Result;
-  auto It = getBeginIt(BB);
-  auto EIt = getEndIt(BB);
-  long BBSize = std::distance(It, EIt);
-  assert(BBSize > 0 && "Should not reach here");
-
-  for (size_t i = 0; It != EIt; ++It, ++i) {
-    if (!Special.isUsedInFunction(i))
-      continue;
-    Result.push_back(&*It);
-  }
-  return Result;
-};
-
 /// Common steps of replacing equal basic blocks
 /// 1) Get common basic block info(inputs, outputs, ...)
 /// 2) Prepare procedure abstraction cost (PAC)
@@ -1139,14 +1124,9 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
       *BBs.front()->getParent());
 
   BBsCommonInfo CommonInfo(BBs, TTI);
-  auto ExtractedBlock =
-      extractActualInsts(BBs.front(), CommonInfo.getSpecialInsts());
-  if (ExtractedBlock.size() <= 2) {
-    debugPrint(BBs.front(), "Block family is unprofitable to be factored out");
-    return false;
-  }
 
-  PAC->init(TTI, ExtractedBlock);
+  PAC->init(TTI, CommonInfo.getSpecialInsts(), getBeginIt(BBs.front()),
+            getEndIt(BBs.front()));
 
   if (PAC->isTiny()) {
     debugPrint(BBs.front(), "Block family is not worth merging");

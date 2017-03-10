@@ -15,33 +15,39 @@
 //===----------------------------------------------------------------------===//
 #include "CommonPAC.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
+
 #include <set>
 
 using namespace llvm;
 
-// TODO: handle call insts in a special way
-void CommonPAC::init(const TargetTransformInfo &TTI,
-                     const SmallVectorImpl<Instruction *> &Insts) {
+void CommonPAC::init(const llvm::TargetTransformInfo &TTI,
+                     const InstructionLocation &IL,
+                     const llvm::BasicBlock::const_iterator &Begin,
+                     const llvm::BasicBlock::const_iterator &End) {
+  assert(std::distance(Begin, End) >= 1 && "Should not reach here");
   this->TTI = &TTI;
-  BlockWeight = 0;
-  for (Instruction *I : Insts) {
+  OriginalBlockWeight = 0;
+  NewBlockAddWeight = 0;
+  FunctionWeight = 0;
+
+  size_t i = 0;
+  for (auto It = Begin; It != End; ++It, ++i) {
+    const Instruction *I = &*It;
     if (isSkippedInstruction(TTI, I))
       continue;
+    size_t InstWeight = 1;
     if (auto CI = dyn_cast<CallInst>(I)) {
-      BlockWeight += getFunctionCallWeight(*CI);
+      InstWeight = getCommonFunctionCallWeight(*CI);
     }
-    ++BlockWeight;
+
+    addWeight(IL, InstWeight, i);
   }
 }
 
-bool CommonPAC::isTiny() const { return BlockWeight <= 2; }
+bool CommonPAC::isTiny() const { return FunctionWeight <= 2; }
 
 bool CommonPAC::replaceWithCall(const size_t InputArgs,
                                 const size_t OutputArgs) const {
-  auto OriginalBlockWeight = getOriginalBlockWeight();
   return (IsTail && 1 < OriginalBlockWeight) ||
          (getNewBlockWeight(InputArgs, OutputArgs) < OriginalBlockWeight);
 }
@@ -55,9 +61,8 @@ bool CommonPAC::replaceWithCall(const size_t BBAmount, const size_t InputArgs,
     return true;
   }
 
-  const size_t OldCost = getOriginalBlockWeight();
   const size_t NewBlockCost = getNewBlockWeight(InputArgs, OutputArgs);
-  const size_t InstsProfitBy1Replacement = OldCost - NewBlockCost;
+  const size_t InstsProfitBy1Replacement = OriginalBlockWeight - NewBlockCost;
   const size_t FunctionCreationCost =
       getFunctionCreationWeight(InputArgs, OutputArgs);
 
@@ -101,10 +106,8 @@ size_t CommonPAC::getNewBlockWeight(const size_t InputArgs,
   // AllocaOutputs is multiplied by 2, because:
   //  1) move address to appropriate register (or push)
   //  2) after call extract value from allocated space
-  return 1 + InputArgs + 2 * AllocaOutputs;
+  return NewBlockAddWeight + 1 + InputArgs + 2 * AllocaOutputs;
 }
-
-size_t CommonPAC::getOriginalBlockWeight() const { return BlockWeight; }
 
 size_t CommonPAC::getFunctionCreationWeight(const size_t InputArgs,
                                             const size_t OutputArgs) const {
@@ -112,9 +115,9 @@ size_t CommonPAC::getFunctionCreationWeight(const size_t InputArgs,
   // count storing values for each output value and assume the worst case when
   // we move values into convenient registers
   // don't forget about return instruction
-  return BlockWeight + OutputStores + 1;
+  return FunctionWeight + OutputStores + 1;
 }
 
-size_t CommonPAC::getFunctionCallWeight(const llvm::CallInst &Inst) {
+size_t CommonPAC::getCommonFunctionCallWeight(const llvm::CallInst &Inst) {
   return 1 + Inst.getNumArgOperands();
 }

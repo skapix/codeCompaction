@@ -9,19 +9,22 @@
 
 #include "PAC_x86_64.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/IR/Constants.h"
 
 using namespace llvm;
 
-bool checkLoadStore(SmallVectorImpl<Instruction *>::const_iterator Start,
-                    SmallVectorImpl<Instruction *>::const_iterator End) {
+bool checkLoadStore(BasicBlock::const_iterator Start,
+                    BasicBlock::const_iterator End) {
   if (std::distance(Start, End) < 3)
     return false;
-  if (!isa<LoadInst>(*Start) || !isa<StoreInst>(*(Start + 2)))
+  const Instruction *PLoad = &*Start++;
+  const Instruction *POp = &*Start++;
+  const Instruction *PStore = &*Start;
+
+  if (!isa<LoadInst>(PLoad) || !isa<StoreInst>(PStore))
     return false;
 
-  const LoadInst *L = cast<LoadInst>(*Start);
-  const StoreInst *S = cast<StoreInst>(*(Start + 2));
+  const LoadInst *L = cast<LoadInst>(PLoad);
+  const StoreInst *S = cast<StoreInst>(PStore);
   if (L->getPointerOperand() != S->getPointerOperand())
     return false;
 
@@ -30,9 +33,9 @@ bool checkLoadStore(SmallVectorImpl<Instruction *>::const_iterator Start,
   // add i64 %val, 1
   // sub i32 %val, 1
 
-  if (!isa<BinaryOperator>(*(Start + 1)))
+  if (!isa<BinaryOperator>(POp))
     return false;
-  const BinaryOperator *BinOp = cast<BinaryOperator>(*(Start + 1));
+  const BinaryOperator *BinOp = cast<BinaryOperator>(POp);
   if (BinOp->getOpcode() == BinaryOperator::BinaryOps::Add ||
       BinOp->getOpcode() == BinaryOperator::BinaryOps::Sub) {
     // check for increment and decrement of the value
@@ -46,74 +49,88 @@ bool checkLoadStore(SmallVectorImpl<Instruction *>::const_iterator Start,
   return false;
 }
 
-size_t
-getCombinedCost(SmallVectorImpl<Instruction *>::const_iterator &Beg,
-                const SmallVectorImpl<Instruction *>::const_iterator &End) {
+size_t getCombinedCost(BasicBlock::const_iterator &Beg,
+                       const BasicBlock::const_iterator &End) {
   if (checkLoadStore(Beg, End)) {
-    Beg += 3 - 1;
+    std::advance(Beg, 3 - 1);
     return 1;
   }
   return 0;
 }
 
-void PAC_x86_64::init(const TargetTransformInfo &TTI,
-                      const SmallVectorImpl<Instruction *> &Insts) {
-  assert(!Insts.empty() && "Should not reach here");
+void PAC_x86_64::init(const llvm::TargetTransformInfo &TTI,
+                      const InstructionLocation &IL,
+                      const llvm::BasicBlock::const_iterator &Begin,
+                      const llvm::BasicBlock::const_iterator &End) {
+  assert(std::distance(Begin, End) >= 1 && "Should not reach here");
   this->TTI = &TTI;
+  OriginalBlockWeight = 0;
+  NewBlockAddWeight = 0;
+  FunctionWeight = 0;
 
-  BlockWeight = 0;
-  HasAlloca = false;
-  for (auto It = Insts.begin(), EIt = Insts.end(); It != EIt; ++It) {
-    size_t Cost = getCombinedCost(It, EIt);
+  // usually in x86_64 all allocas are combined in 1 alloca instruction
+  // (add rsp, ?). Also in the end of routine substracts previously
+  // added value.
+  bool HasAllocaInFunc = false;
+  bool HasAllocaOutside = false;
+
+  size_t i = 0;
+  for (auto It = Begin; It != End; ++It, ++i) {
+    size_t Cost = getCombinedCost(It, End);
     if (Cost) {
-      BlockWeight += Cost;
+      addWeight(IL, Cost, i);
       continue;
     }
 
-    const Instruction *I = *It;
+    const Instruction *I = &*It;
     if (isSkippedInstruction(TTI, I))
       continue;
+
+    Cost = 0;
+
     switch (I->getOpcode()) {
     case Instruction::Alloca:
-      HasAlloca = true;
+      HasAllocaInFunc |= IL.isUsedInsideFunction(i);
+      HasAllocaOutside |= IL.isUsedOutsideFunction(i);
       break;
     case Instruction::Call:
-      BlockWeight += getFunctionCallWeight(cast<CallInst>(*I));
+      Cost = getFunctionCallWeight(*cast<CallInst>(I));
       break;
     default:
-      ++BlockWeight;
+      Cost = 1;
     }
+    if (Cost)
+      addWeight(IL, Cost, i);
+
+  } // for
+
+  if (HasAllocaInFunc)
+    FunctionWeight += 2;
+  if (HasAllocaOutside)
+    NewBlockAddWeight += 2;
+  if (HasAllocaInFunc || HasAllocaOutside)
+    OriginalBlockWeight += 2;
+
+  // Handle last ICmp instruction in a special way, because x86 perform
+  // jumps according to flags. Since then, if instruction returns boolean value:
+  // For new BB: processor has to set flags one more time
+  // For function: move from flag registers into ax: sete %al
+  bool IsLastCmp = std::prev(End)->getOpcode() == Instruction::ICmp;
+
+  if (IsLastCmp) {
+    ++FunctionWeight;
+    ++NewBlockAddWeight;
   }
-
-  IsLastCmp = Insts.back()->getOpcode() == Instruction::ICmp;
-}
-
-bool PAC_x86_64::isTiny() const {
-  return BlockWeight <= 2 + static_cast<size_t>(IsLastCmp);
 }
 
 size_t PAC_x86_64::getNewBlockWeight(const size_t InputArgs,
                                      const size_t OutputArgs) const {
-  const size_t AllocaOutputs = OutputArgs > 0 ? OutputArgs - 1 : 0;
-  const bool HasAlloca = AllocaOutputs > 0;
-  const size_t AmountPenalty =
-      InputArgs + AllocaOutputs <= 4 ? 0 : InputArgs + AllocaOutputs - 4;
+  const bool HasAlloca = OutputArgs > 1;
+  const size_t AmountArgs = InputArgs + OutputArgs - HasAlloca;
+  const size_t Penalty = AmountArgs <= 4 ? 0 : AmountArgs - 4;
 
-  return 1 + HasAlloca + InputArgs + 2 * AllocaOutputs + 2 * AmountPenalty +
-         IsLastCmp;
-}
-
-size_t PAC_x86_64::getOriginalBlockWeight() const {
-  return CommonPAC::getOriginalBlockWeight() + HasAlloca * 2;
-}
-
-size_t PAC_x86_64::getFunctionCreationWeight(const size_t InputArgs,
-                                             const size_t OutputArgs) const {
-  // isLastCmp is added because of comparing results is necessary
-  // to store in register.
-  // It is used because usually additional instruction is added: sete %al
-  return CommonPAC::getFunctionCreationWeight(InputArgs, OutputArgs) +
-         HasAlloca * 2 + IsLastCmp;
+  return CommonPAC::getNewBlockWeight(InputArgs, OutputArgs) + HasAlloca +
+         2 * Penalty;
 }
 
 size_t PAC_x86_64::getFunctionCallWeight(const llvm::CallInst &Inst) {

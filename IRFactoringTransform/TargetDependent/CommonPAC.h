@@ -24,9 +24,10 @@ class CommonPAC : public IProceduralAbstractionCost {
 public:
   /// BlockWeight should be set in init, otherwise all methods should
   /// be overwritten
-  virtual void
-  init(const llvm::TargetTransformInfo &TTI,
-       const llvm::SmallVectorImpl<llvm::Instruction *> &Insts) override;
+  virtual void init(const llvm::TargetTransformInfo &TTI,
+                    const InstructionLocation &I,
+                    const llvm::BasicBlock::const_iterator &Begin,
+                    const llvm::BasicBlock::const_iterator &End) override;
   virtual bool isTiny() const override;
   virtual bool replaceWithCall(const size_t InputArgs,
                                const size_t OutputArgs) const override final;
@@ -35,16 +36,26 @@ public:
   virtual ~CommonPAC();
 
 protected:
+  /// Common weight-calculating routine
+  void addWeight(const InstructionLocation &IL, const size_t Weight,
+                 const size_t InstNum) {
+    OriginalBlockWeight += Weight;
+    if (IL.isUsedInsideFunction(InstNum))
+      FunctionWeight += Weight;
+    if (IL.isUsedOutsideFunction(InstNum))
+      NewBlockAddWeight += Weight;
+  }
+
+  /// Calculate weight of Call instruction.
+  /// Not static because of possible TTI Use
+  static size_t getCommonFunctionCallWeight(const llvm::CallInst &Inst);
+
   /// Provides us with information, when Instruction does not
   /// produce machine code in architecture (e.g BitCastInst)
   /// \param I instruction
   /// \return true, if instruction \p I has no mapping to machine code
   static bool isSkippedInstruction(const llvm::TargetTransformInfo &TTI,
                                    const llvm::Instruction *I);
-
-  size_t getFunctionCallWeight(const llvm::CallInst &Inst);
-
-  virtual size_t getOriginalBlockWeight() const;
 
   /// \param InputArgs amount of input arguments
   /// \param OutputArgs amount of output armugents
@@ -57,7 +68,9 @@ protected:
 
 protected:
   const llvm::TargetTransformInfo *TTI;
-  size_t BlockWeight;
+  size_t OriginalBlockWeight;
+  size_t FunctionWeight;
+  size_t NewBlockAddWeight;
 };
 
 #endif // LLVMTRANSFORM_WEIGHT_H
