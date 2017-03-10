@@ -32,9 +32,7 @@ entry:
 ; CHECK-NEXT: [[BC:%[_\.a-z0-9]+]] = bitcast %struct.S* [[Al]] to i8*
 ; CHECK-NEXT: call void @llvm.lifetime.start(i64 {{[0-9]+}}, i8* nonnull [[BC]])
 ; Decide what to do with GEPInsts
-; CHECK: call{{[a-z ]*}} i1  [[FName:@[_\.a-z0-9]+]]
-; CHECK-NEXT: br
-;  %0 = bitcast %struct.S* %s to i8*
+; CHECK: call {{[a-z ]*}} i1  [[FName:@[_\.a-z0-9]+]]
 
 if.then:
   %1 = load i8, i8* %c, align 4
@@ -79,6 +77,7 @@ entry:
 ; CHECK: call{{[a-z ]*}} i1  [[FName]]
 
 if.then:
+  %dummy2 = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 1
   %1 = load i8, i8* %c, align 4
   %conv3 = sext i8 %1 to i32
   %mul = mul nsw i32 %conv3, 3
