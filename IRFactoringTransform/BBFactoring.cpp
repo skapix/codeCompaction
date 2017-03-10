@@ -41,6 +41,14 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
+static cl::opt<std::string>
+  MergeSpecialFunction("bbfactor-function", cl::Hidden,
+             cl::desc("Merge BBs, when at least one BB from this set has specified parent"));
+
+static cl::opt<std::string>
+  MergeSpecialBB("bbfactor-basic-block", cl::Hidden,
+                    cl::desc("Merge BBs, when at least one BB name equals to specified"));
+
 // TODO: ? place BB comparing in this file
 
 namespace {
@@ -147,6 +155,34 @@ bool BBFactoring::runOnModule(Module &M) {
     }
   }
 
+  auto RemoveIf = [&IdenticalBlocksContainer](const std::function<bool(const BasicBlock*)> &F) {
+    for (auto It = IdenticalBlocksContainer.begin(), EIt = IdenticalBlocksContainer.end(); It != EIt;) {
+      bool Exists = any_of(*It, F);
+      errs() << It->front()->getName();
+      if (Exists)
+        ++It;
+      else {
+        It = IdenticalBlocksContainer.erase(It);
+        EIt = IdenticalBlocksContainer.end();
+      }
+    }
+  };
+
+  if (!MergeSpecialFunction.empty()) {
+    RemoveIf([](const BasicBlock *BB) {
+      return BB->getParent()->getName() == MergeSpecialFunction;
+    });
+  }
+
+  if (!MergeSpecialBB.empty()) {
+    // BB's names are not saved during loading IR module.
+    // Names are concatenated with some number and hence, only
+    // the first symbols of names should be matched.
+    RemoveIf([](const BasicBlock *BB) {
+      return BB->getName().substr(0, MergeSpecialBB.size()) == MergeSpecialBB;
+    });
+  }
+
   bool Changed = false;
 
   const StringRef Arch =
@@ -190,9 +226,9 @@ static inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
   return It;
 }
 
-static void debugPrint(const BasicBlock *BB, const StringRef Str) {
-  DEBUG(dbgs() << Str << ". Block: " << BB->getName()
-               << ". Function: " << BB->getParent()->getName() << '\n');
+static void debugPrint(const BasicBlock *BB, const StringRef Str = "", bool NewLine = true) {
+  DEBUG(dbgs() << Str << (Str != "" ? ". " : "")  << "Block: " << BB->getName()
+               << ". Function: " << BB->getParent()->getName() << (NewLine ? '\n' : ' '));
 }
 
 /// The way of representing output and skipped instructions of basic blocks
@@ -1205,7 +1241,9 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
   DEBUG(dbgs() << "Number of basic blocks, replaced with " << CreatedInfo
                << " function " << F->getName() << ": " << BBInfos.size()
                << "\n");
+  debugPrint(BBs.front(), "", false);
   DEBUG(F->print(dbgs()));
+  DEBUG(dbgs() << "\n");
 
   return true;
 }
