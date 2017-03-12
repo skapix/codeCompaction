@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVMTRANSFORM_WEIGHT_H
-#define LLVMTRANSFORM_WEIGHT_H
+#ifndef LLVMTRANSFORM_COMMONPAC_H
+#define LLVMTRANSFORM_COMMONPAC_H
 
 #include "../IProceduralAbstractionCost.h"
 #include <llvm/IR/Instructions.h>
@@ -73,4 +73,4 @@ protected:
   size_t NewBlockAddWeight;
 };
 
-#endif // LLVMTRANSFORM_WEIGHT_H
+#endif // LLVMTRANSFORM_COMMONPAC_H

@@ -31,6 +31,7 @@ class InstructionLocation {
 public:
   virtual bool isUsedInsideFunction(const size_t i) const = 0;
   virtual bool isUsedOutsideFunction(const size_t i) const = 0;
+  virtual size_t amountInsts() const = 0;
 };
 
 /// Interface's main aim is to aproximately calculate whether

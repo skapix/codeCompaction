@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVMTRANSFORM_DECISIONMAKER_X86_64_H
-#define LLVMTRANSFORM_DECISIONMAKER_X86_64_H
+#ifndef LLVMTRANSFORM_PAC_X86_64_H
+#define LLVMTRANSFORM_PAC_X86_64_H
 
 #include "CommonPAC.h"
 #include "llvm/IR/Instruction.h"
@@ -33,4 +33,4 @@ public:
   virtual ~PAC_x86_64() {}
 };
 
-#endif // LLVMTRANSFORM_DECISIONMAKER_X86_64_H
+#endif // LLVMTRANSFORM_PAC_X86_64_H

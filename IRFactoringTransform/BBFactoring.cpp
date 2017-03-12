@@ -41,13 +41,14 @@ static cl::opt<bool>
     ForceMerge("bbfactor-force-merging", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
-static cl::opt<std::string>
-  MergeSpecialFunction("bbfactor-function", cl::Hidden,
-             cl::desc("Merge BBs, when at least one BB from this set has specified parent"));
+static cl::opt<std::string> MergeSpecialFunction(
+    "bbfactor-function", cl::Hidden,
+    cl::desc(
+        "Merge BBs, when at least one BB from this set has specified parent"));
 
-static cl::opt<std::string>
-  MergeSpecialBB("bbfactor-basic-block", cl::Hidden,
-                    cl::desc("Merge BBs, when at least one BB name equals to specified"));
+static cl::opt<std::string> MergeSpecialBB(
+    "bbfactor-basic-block", cl::Hidden,
+    cl::desc("Merge BBs, when at least one BB name equals to specified"));
 
 // TODO: ? place BB comparing in this file
 
@@ -155,8 +156,11 @@ bool BBFactoring::runOnModule(Module &M) {
     }
   }
 
-  auto RemoveIf = [&IdenticalBlocksContainer](const std::function<bool(const BasicBlock*)> &F) {
-    for (auto It = IdenticalBlocksContainer.begin(), EIt = IdenticalBlocksContainer.end(); It != EIt;) {
+  auto RemoveIf = [&IdenticalBlocksContainer](
+                      const std::function<bool(const BasicBlock *)> &F) {
+    for (auto It = IdenticalBlocksContainer.begin(),
+              EIt = IdenticalBlocksContainer.end();
+         It != EIt;) {
       bool Exists = any_of(*It, F);
       errs() << It->front()->getName();
       if (Exists)
@@ -226,9 +230,11 @@ static inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
   return It;
 }
 
-static void debugPrint(const BasicBlock *BB, const StringRef Str = "", bool NewLine = true) {
-  DEBUG(dbgs() << Str << (Str != "" ? ". " : "")  << "Block: " << BB->getName()
-               << ". Function: " << BB->getParent()->getName() << (NewLine ? '\n' : ' '));
+static void debugPrint(const BasicBlock *BB, const StringRef Str = "",
+                       bool NewLine = true) {
+  DEBUG(dbgs() << Str << (Str != "" ? ". " : "") << "Block: " << BB->getName()
+               << ". Function: " << BB->getParent()->getName()
+               << (NewLine ? '\n' : ' '));
 }
 
 /// The way of representing output and skipped instructions of basic blocks
@@ -377,6 +383,8 @@ public:
 
   const Type &operator[](const size_t i) const { return SpecialInsts[i]; }
   Type &operator[](const size_t i) { return SpecialInsts[i]; }
+
+  virtual size_t amountInsts() const override { return SpecialInsts.size(); }
 
 private:
   SmallVector<Type, 64> SpecialInsts;
@@ -618,7 +626,7 @@ void BBsCommonInfo::setSpecialInsts(const TargetTransformInfo &TTI,
   } // for
 
   // remove reduntant Instructions from function, i.e
-  // if it is possible to move instruction, move it.
+  // if it is possible to move away instruction from function, move it.
   DenseSet<Value *> UsedValues;
 
   auto RIt = getEndIt(BB), REIt = getBeginIt(BB);
@@ -639,8 +647,8 @@ void BBsCommonInfo::setSpecialInsts(const TargetTransformInfo &TTI,
         SpecialInsts[i] = SpecialInstsIds::Type::MoveBefore;
         continue;
       }
-      if (SpecialInsts[i] == SpecialInstsIds::Type::CopyBefore) {
-        SpecialInsts[i] = SpecialInstsIds::Type::MoveBefore;
+      if (SpecialInsts[i] == SpecialInstsIds::Type::CopyAfter) {
+        SpecialInsts[i] = SpecialInstsIds::Type::MoveAfter;
         continue;
       }
     }
