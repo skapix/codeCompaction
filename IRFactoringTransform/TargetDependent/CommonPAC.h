@@ -57,6 +57,11 @@ protected:
   static bool isSkippedInstruction(const llvm::TargetTransformInfo &TTI,
                                    const llvm::Instruction *I);
 
+  static llvm::BasicBlock::const_iterator getLastFuncInst(
+    const InstructionLocation &IL,
+    const llvm::BasicBlock::const_iterator &Begin,
+    const llvm::BasicBlock::const_iterator &End);
+
   /// \param InputArgs amount of input arguments
   /// \param OutputArgs amount of output armugents
   /// \return approximate amount of instructions for calling the function.
@@ -72,5 +77,6 @@ protected:
   size_t FunctionWeight;
   size_t NewBlockAddWeight;
 };
+
 
 #endif // LLVMTRANSFORM_COMMONPAC_H

@@ -115,7 +115,8 @@ void PAC_x86_64::init(const llvm::TargetTransformInfo &TTI,
   // jumps according to flags. Since then, if instruction returns boolean value:
   // For new BB: processor has to set flags one more time
   // For function: move from flag registers into ax: sete %al
-  bool IsLastCmp = std::prev(End)->getOpcode() == Instruction::ICmp;
+  const Instruction *PCMP = &*getLastFuncInst(IL, Begin, End);
+  bool IsLastCmp = PCMP->getOpcode() == Instruction::ICmp;
 
   if (IsLastCmp) {
     ++FunctionWeight;

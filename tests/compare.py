@@ -18,13 +18,13 @@ def compileWithFrontend(filename, arch, isVerbose):
     irFile = filename
     if not fileExt == ".ll" and not fileExt == ".bc":
         frontend = Compile(filename, arch)
-        frontend.compile() 
+        frontend.compile(printQuery = isVerbose)
         irFile = frontend.outputFile
     
 
     opt = createOptCompile(irFile, arch)
     irOptFile = opt.outputFile
-    _, output, error = opt.compile()
+    _, output, error = opt.compile(printQuery = isVerbose)
     # dbgs info goes into errs, because output goes to the outputFile
     if isVerbose and error != "":
         print("Opt:\n")
@@ -32,14 +32,19 @@ def compileWithFrontend(filename, arch, isVerbose):
 
 
     compileIr = Compile(irFile, arch)
-    compileIr.compile()
+    compileIr.compile(printQuery = isVerbose)
     compileIrOpt = Compile(irOptFile, arch)
-    compileIrOpt.compile()
+    compileIrOpt.compile(printQuery = isVerbose)
     return [compileIr.outputFile, compileIrOpt.outputFile]
 
 
-def getBinaryCodeSize(filename):
-    err, out, _ = createProcess("size " + filename)
+def getBinaryCodeSize(filename, arch):
+    assert arch in g_arches, "unknown arch: " + arch
+    util = g_arches[arch]
+    assert "size" in util, "{0} does not contain size utility".format(arch)
+    util = util["size"]
+    util = util.args
+    err, out, _ = createProcess(util + " " + filename)
     if err != 0:
         raise "Can't get binary code size. Error: " + out
     return int(out.split()[6])
@@ -62,8 +67,8 @@ def compareBinaryFileSizes(filename, archList, isVerbose):
         try:
             files = compileWithFrontend(filename, arch, isVerbose)
             assert len(files) == 2, "Wrong final length size"
-            sz = getBinaryCodeSize(files[0])
-            szOpt = getBinaryCodeSize(files[1])
+            sz = getBinaryCodeSize(files[0], arch)
+            szOpt = getBinaryCodeSize(files[1], arch)
             if isVerbose:
                 print(arch + ": ", end="")
             printSizes(sz, szOpt)
@@ -91,7 +96,7 @@ if __name__ == "__main__":
     (currently .ll, .bc .c, .cpp) for x86-64 and arm architectures:  with and without bbfactor optimizaton.\
     Further it compares code sizes of the created object files')
 
-    parser.add_argument('filenames', nargs='+', help='Filenames to be compared')
+    parser.add_argument('filenames', nargs='+', help='Filenames to be compared with their optimized versions')
     parser.add_argument('--arch', nargs='*', choices=g_arches.keys(), default=g_arches.keys(),
                         help='Choose architecture. All by default')
     parser.add_argument('--args', nargs='*', default="", type=parseAdditionalArguments,  help="Additional args in view like 'utility:extra flags'")

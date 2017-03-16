@@ -112,12 +112,27 @@ size_t CommonPAC::getNewBlockWeight(const size_t InputArgs,
 size_t CommonPAC::getFunctionCreationWeight(const size_t InputArgs,
                                             const size_t OutputArgs) const {
   const size_t OutputStores = OutputArgs > 0 ? OutputArgs - 1 : 0;
-  // count storing values for each output value and assume the worst case when
-  // we move values into convenient registers
-  // don't forget about return instruction
+  // OutputStores ~ count storing values for each output
+  // 1 ~ return instruction
   return FunctionWeight + OutputStores + 1;
 }
 
 size_t CommonPAC::getCommonFunctionCallWeight(const llvm::CallInst &Inst) {
   return 1 + Inst.getNumArgOperands();
+}
+
+BasicBlock::const_iterator CommonPAC::getLastFuncInst(
+  const InstructionLocation &IL,
+  const BasicBlock::const_iterator &Begin,
+  const BasicBlock::const_iterator &End) {
+
+  BasicBlock::const_iterator PCI = std::prev(End);
+  size_t PCIIndex = IL.amountInsts() - 1;
+  while (!IL.isUsedInsideFunction(PCIIndex)) {
+    if (PCIIndex == 0)
+      return End;
+    --PCI;
+    --PCIIndex;
+  }
+  return PCI;
 }

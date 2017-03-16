@@ -162,7 +162,6 @@ bool BBFactoring::runOnModule(Module &M) {
               EIt = IdenticalBlocksContainer.end();
          It != EIt;) {
       bool Exists = any_of(*It, F);
-      errs() << It->front()->getName();
       if (Exists)
         ++It;
       else {
@@ -693,6 +692,7 @@ public:
   BBInfo(const BBInfo &Other) : CommonInfo(Other.CommonInfo) { *this = Other; }
   BBInfo &operator=(const BBInfo &Other);
 
+  void setBB(BasicBlock *BB) { this->BB = BB; }
   BasicBlock *getBB() const { return BB; }
 
   const SmallVector<Value *, 8> &getInputs() const;
@@ -1238,18 +1238,19 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
   }
 
   assert(F != nullptr && "Should not be reached");
-
   SmallVector<std::pair<Value *, Value *>, 128> Replaces;
+
   for (auto &Info : BBInfos) {
     BasicBlock *NewBB = createBBWithCall(Info, F, Replaces);
     replaceBBs(Info.getBB(), NewBB, Replaces);
     delete Info.getBB();
+    Info.setBB(NewBB);
   }
 
   DEBUG(dbgs() << "Number of basic blocks, replaced with " << CreatedInfo
                << " function " << F->getName() << ": " << BBInfos.size()
                << "\n");
-  debugPrint(BBs.front(), "", false);
+  debugPrint(BBInfos.front().getBB(), "", false);
   DEBUG(F->print(dbgs()));
   DEBUG(dbgs() << "\n");
 

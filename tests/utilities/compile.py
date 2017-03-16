@@ -84,10 +84,12 @@ class Compile:
         output = "" if self.outputFile == "" else " -o " + self.outputFile
         return self.compileInfo.program + " " + self.inputFile + " " + self.compileInfo.args + " " + self.arch.args + " " + extraArgs + output
 
-    def compile(self, args = ""):
+    def compile(self, args = "", printQuery = False):
         extraArgs = getArg(self.compileInfo.program) if args == "" else args
         Compile.__createDirs(self.outputFile)
         query = self.__createQuery(extraArgs)
+        if printQuery:
+            print("Query:", query)
         (self.errorCode, self.output, self.error) = createProcess(query)
         if self.errorCode != 0:
             raise Exception("Query: " + query + "\nError: " + self.error)
