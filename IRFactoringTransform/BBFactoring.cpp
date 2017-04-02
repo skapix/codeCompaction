@@ -308,6 +308,19 @@ static bool isInstUsedOutsideParent(const Instruction *I) {
   return false;
 }
 
+
+static bool isValUsedByInsts(const Value *V,
+                                    const SmallVectorImpl<Instruction *> &Insts) {
+  for (auto I : Insts) {
+    for (auto &Op : I->operands()) {
+      if (V == Op.get())
+        return true;
+    }
+  }
+  return false;
+
+}
+
 /// Get values, that are created inside of \p BB and
 /// are used outside of it.
 /// Result is written as a vector of instruction's numerical order in BB
@@ -753,10 +766,11 @@ static SmallVector<Value *, 8> getInput(BasicBlock *BB,
 
     Values.insert(&*I);
     assert(!isa<TerminatorInst>(I) && !isa<PHINode>(I) && "Malformed BB");
-
     for (auto &Ops : I->operands()) {
       // global value is treated like constant
       if (isa<Constant>(Ops.get()))
+        continue;
+      if (isa<InlineAsm>(Ops.get()))
         continue;
 
       if (Values.count(Ops.get()) == 0) {
@@ -992,7 +1006,7 @@ createBBWithCall(const BBInfo &Info, Function *F,
     llvm_unreachable("Bad BB comparison or wrong Type convertion");
   };
 
-  auto InsertFunction = [&](Instruction *I) {
+  auto InsertInst = [&](Instruction *I) {
     Instruction *NewI = Builder.Insert(I->clone(), I->getName());
     Replaces.emplace_back(I, NewI);
   };
@@ -1001,13 +1015,13 @@ createBBWithCall(const BBInfo &Info, Function *F,
   auto ItBeg = getBeginIt(BB);
   auto ItEnd = getEndIt(BB);
   for (auto It = BB->begin(); It != ItBeg; ++It)
-    InsertFunction(&*It);
+    InsertInst(&*It);
 
   // 2) Create all moved/copied before functions
   size_t i = 0;
   for (auto It = ItBeg; It != ItEnd; ++It, ++i) {
     if (SpecialInsts.isUsedBeforeFunction(i))
-      InsertFunction(&*It);
+      InsertInst(&*It);
   }
 
   // 3) Create Argument list for function call
@@ -1038,11 +1052,19 @@ createBBWithCall(const BBInfo &Info, Function *F,
   }
 
   // 5) Save and Replace all Output values
+  SmallVector<Instruction *, 8> UsedAfterFunction;
+  i = 0;
+  for (auto It = ItBeg; It != ItEnd; ++It, ++i) {
+    if (SpecialInsts.isUsedAfterFunction(i))
+      UsedAfterFunction.push_back(&*It);
+  }
+
   auto AllocaIt = Args.begin() + Input.size();
   for (auto It = Output.begin(), EIt = Output.end(); It != EIt;
        ++It, ++AllocaIt) {
     Instruction *CurrentInst = *It;
-    if (!isInstUsedOutsideParent(CurrentInst))
+    if (!isInstUsedOutsideParent(CurrentInst) &&
+      !isValUsedByInsts(CurrentInst, UsedAfterFunction))
       continue;
 
     auto BBLoadInst = Builder.CreateLoad(*AllocaIt);
@@ -1051,15 +1073,13 @@ createBBWithCall(const BBInfo &Info, Function *F,
   }
 
   // 6) Store all Insts, used after function call
-  i = 0;
-  for (auto It = ItBeg; It != ItEnd; ++It, ++i) {
-    if (SpecialInsts.isUsedAfterFunction(i))
-      InsertFunction(&*It);
+  for (auto I : UsedAfterFunction) {
+    InsertInst(I);
   }
 
   // 7) Finish BB with TerminatorInst
   for (auto It = ItEnd, EIt = BB->end(); It != EIt; ++It) {
-    InsertFunction(&*It);
+    InsertInst(&*It);
   }
 
   return NewBB;
@@ -1214,7 +1234,7 @@ bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
   }
 
   Function *F = nullptr;
-  std::string CreatedInfo;
+  StringRef CreatedInfo;
   DEBUG(CreatedInfo = "existed");
 
   // Try to find suitable for merging function
