@@ -974,7 +974,22 @@ createBBWithCall(const BBInfo &Info, Function *F,
   Replaces.clear();
 
   auto GetValueForArgs = [&Builder](Value *V, Type *T) {
-    return V->getType() == T ? V : Builder.CreateBitCast(V, T);
+    if (V->getType() == T)
+      return V;
+    if (llvm::BitCastInst::isBitCastable(V->getType(), T))
+      return Builder.CreateBitCast(V, T);
+
+    // TODO: create common function with least specified arguments
+
+    if (V->getType()->isPointerTy() && !T->isPointerTy()) {
+      return Builder.CreatePtrToInt(V, T);
+    }
+    Value *PI;
+    if (!V->getType()->isPointerTy() && T->isPointerTy()) {
+      PI = Builder.CreateIntToPtr(V, llvm::Type::getInt8PtrTy(V->getContext()));
+      return Builder.CreateBitCast(PI, T);
+    }
+    llvm_unreachable("Bad BB comparison or wrong Type convertion");
   };
 
   auto InsertFunction = [&](Instruction *I) {
