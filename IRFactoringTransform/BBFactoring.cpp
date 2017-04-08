@@ -182,14 +182,14 @@ bool BBFactoring::runOnModule(Module &M) {
     // Names are concatenated with some number and hence, only
     // the first symbols of names should be matched.
     RemoveIf([](const BasicBlock *BB) {
-      return BB->getName().substr(0, MergeSpecialBB.size()) == MergeSpecialBB;
+      return BB->getName().take_front(MergeSpecialBB.size()) == MergeSpecialBB;
     });
   }
 
   bool Changed = false;
 
   const StringRef Arch =
-      M.getTargetTriple().substr(0, M.getTargetTriple().find('-'));
+      StringRef(M.getTargetTriple()).take_front(M.getTargetTriple().find('-'));
   auto DM = ForceMerge ? make_unique<ForceMergePAC>()
                        : IProceduralAbstractionCost::Create(Arch);
   assert(DM.get() && "DM was not created properly");
@@ -557,7 +557,6 @@ setTypeCommonCase(const Instruction *I,
                   const SmallPtrSetImpl<const Value *> &ValuesAfter,
                   const SmallVectorImpl<Instruction *> &Outputs,
                   const TargetTransformInfo &TTI) {
-  const BasicBlock *BB = I->getParent();
   // try handle intrinsic
   auto Intr = dyn_cast<IntrinsicInst>(I);
   if (Intr) {
@@ -579,7 +578,7 @@ setTypeCommonCase(const Instruction *I,
     for (auto AU : AI->users()) {
       const Instruction *AUI = dyn_cast<Instruction>(AU);
       assert(AUI && "Can't be used in value; Investigate");
-      assert(AUI->getParent() == BB &&
+      assert(AUI->getParent() == I->getParent() &&
              "Should be set as skipped passed earlier");
       if (find(Outputs, AUI) != Outputs.end()) {
         assert(InstOutPos(I, ValuesBefore, ValuesAfter, Outputs) != None &&
@@ -983,7 +982,7 @@ createBBWithCall(const BBInfo &Info, Function *F,
   Value *Result = Info.getReturnValue();
   auto &SpecialInsts = Info.getSpecial();
 
-  auto NewBB = BasicBlock::Create(BB->getContext(), BB->getName());
+  auto NewBB = BasicBlock::Create(BB->getContext());
   IRBuilder<> Builder(NewBB);
   Replaces.clear();
 
@@ -1007,7 +1006,7 @@ createBBWithCall(const BBInfo &Info, Function *F,
   };
 
   auto InsertInst = [&](Instruction *I) {
-    Instruction *NewI = Builder.Insert(I->clone(), I->getName());
+    Instruction *NewI = Builder.Insert(I->clone());
     Replaces.emplace_back(I, NewI);
   };
 
@@ -1089,10 +1088,13 @@ createBBWithCall(const BBInfo &Info, Function *F,
 /// \p Replaces auxiliary information
 void replaceBBs(BasicBlock *Old, BasicBlock *New,
                 const SmallVectorImpl<std::pair<Value *, Value *>> &Replaces) {
+  New->takeName(Old);
   New->insertInto(Old->getParent(), Old);
   Old->replaceAllUsesWith(New);
-  for (auto Insts : Replaces)
+  for (auto Insts : Replaces) {
+    Insts.first->takeName(Insts.second);
     Insts.first->replaceAllUsesWith(Insts.second);
+  }
 
   Old->removeFromParent();
 
@@ -1128,7 +1130,7 @@ static bool isMergeable(const BBInfo &Info, SmallVectorImpl<size_t> &Permut) {
     Permut.push_back(Id);
   }
 
-  auto FRetVal = cast<ReturnInst>(&F->front().back())->getReturnValue();
+  auto FRetVal = cast<ReturnInst>(&F->front().back())->getReturnValue(); (void)FRetVal;
   assert(
       (Info.getReturnValue() == nullptr || Info.getReturnValue() == FRetVal) &&
       "BBs are not equal");

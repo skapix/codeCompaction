@@ -294,7 +294,7 @@ private:
 
   int cmpMem(StringRef L, StringRef R) const;
 
-  int cmpAttrs(const AttributeSet L, const AttributeSet R) const;
+  int cmpAttrs(const AttributeList L, const AttributeList R) const;
 
   int cmpRangeMetadata(const MDNode *L, const MDNode *R) const;
 

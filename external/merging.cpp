@@ -86,14 +86,14 @@ int BBComparator::cmpMem(StringRef L, StringRef R) const {
   return L.compare(R);
 }
 
-int BBComparator::cmpAttrs(const AttributeSet L,
-                                 const AttributeSet R) const {
+int BBComparator::cmpAttrs(const AttributeList L,
+                                 const AttributeList R) const {
 
   if (int Res = cmpNumbers(L.getNumSlots(), R.getNumSlots()))
     return Res;
 
   for (unsigned i = 0, e = L.getNumSlots(); i != e; ++i) {
-    AttributeSet::iterator LI = L.begin(i), LE = L.end(i), RI = R.begin(i),
+    AttributeList::iterator LI = L.begin(i), LE = L.end(i), RI = R.begin(i),
         RE = R.end(i);
     for (; LI != LE && RI != RE; ++LI, ++RI) {
       Attribute LA = *LI;
@@ -871,24 +871,24 @@ BBComparator::BasicBlockHash BBComparator::basicBlockHash(BasicBlock &BB,
   return H.getHash();
 }
 
-//AttributeSet unnecessaryAttributes
+//AttributeList unnecessaryAttributes
 
 int BBComparator::compare() {
   sn_mapL.clear();
   sn_mapR.clear();
-  static const AttributeSet unnecessaryAttributes = AttributeSet().
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::ReadOnly).
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::WriteOnly).
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::JumpTable).
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::Naked).
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::NoReturn).
-      addAttribute(BBL->getContext(), AttributeSet::FunctionIndex, Attribute::NoRecurse).
-      addAttribute(BBL->getContext(),AttributeSet::FunctionIndex, Attribute::ReadNone);
+  static const AttributeList unnecessaryAttributes = AttributeList().
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::ReadOnly).
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::WriteOnly).
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::JumpTable).
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::Naked).
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoReturn).
+      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoRecurse).
+      addAttribute(BBL->getContext(),AttributeList::FunctionIndex, Attribute::ReadNone);
 
   auto AttributesLF =  BBL->getParent()->getAttributes().removeAttributes(
-      BBL->getContext(), AttributeSet::FunctionIndex, unnecessaryAttributes);
+      BBL->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
   auto AttributesRF =  BBR->getParent()->getAttributes().removeAttributes(
-      BBR->getContext(), AttributeSet::FunctionIndex, unnecessaryAttributes);
+      BBR->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
   if (int Res = cmpAttrs(AttributesLF, AttributesRF))
     return Res;
 
