@@ -27,8 +27,8 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
-
 #include <deque>
+#include <easy/profiler.h>
 
 #define DEBUG_TYPE "bbfactor"
 
@@ -124,12 +124,17 @@ void BBFactoring::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool BBFactoring::runOnModule(Module &M) {
+#ifndef	NDEBUG
+#warning Comparing in debug mode
+#endif
+  EASY_PROFILER_ENABLE;
   if (skipModule(M))
     return false;
 
   DEBUG(dbgs() << "Module name: ");
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
 
+  EASY_BLOCK("BB comparing");
   std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
 
   // calculate hashes for all basic blocks in every function
@@ -140,7 +145,9 @@ bool BBFactoring::runOnModule(Module &M) {
             {BBComparator::basicBlockHash(BB, false, false), &BB});
     }
   }
+  EASY_END_BLOCK;
 
+  EASY_BLOCK("BB preparing to merge");
   std::vector<SmallVector<BasicBlock *, 16>> IdenticalBlocksContainer;
   auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
@@ -155,6 +162,7 @@ bool BBFactoring::runOnModule(Module &M) {
           It->second);
     }
   }
+  EASY_END_BLOCK;
 
   auto RemoveIf = [&IdenticalBlocksContainer](
                       const std::function<bool(const BasicBlock *)> &F) {
@@ -194,12 +202,14 @@ bool BBFactoring::runOnModule(Module &M) {
                        : IProceduralAbstractionCost::Create(Arch);
   assert(DM.get() && "DM was not created properly");
 
+  EASY_BLOCK("BB merging");
   for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
     if (IdenticalBlocks.size() >= 2) {
       Changed |= replace(IdenticalBlocks, DM.get());
     }
   }
-
+  EASY_END_BLOCK;
+  profiler::dumpBlocksToFile("test_profile.prof");
   return Changed;
 }
 

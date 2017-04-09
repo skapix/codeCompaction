@@ -12,7 +12,13 @@ endif()
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+find_package(easy_profiler REQUIRED) # https://github.com/yse/easy_profiler
 project("LLVMTransform")
+
+find_library(GPERFTOOLS_PROFILER NAMES profiler)
+if (${GPERFTOOLS_PROFILER} STREQUAL "GPERFTOOLS_PROFILER-NOTFOUND")
+  message(FATAL_ERROR "Can't find gperftool library")
+endif()
 
 if (NOT MSVC)
   add_compile_options(-Wall)
