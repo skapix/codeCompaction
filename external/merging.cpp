@@ -847,31 +847,16 @@ public:
 // target of calls and the constants used in the function, which makes it useful
 // when possibly merging functions which are the same modulo constants and call
 // targets.
-BBComparator::BasicBlockHash BBComparator::basicBlockHash(BasicBlock &BB,
-                                                          const bool calculatePhiNodes,
-                                                          const bool calculateTerminatorInstruction) {
+BBComparator::BasicBlockHash BBComparator::basicBlockHash(const BasicBlock &BB) {
   HashAccumulator64 H;
   auto IE =  std::prev(BB.end());
   auto I = BB.begin();
-  if (calculatePhiNodes) {
-    for (; isa<PHINode>(I); ++I) {
-      H.add(I->getOpcode());
-    }
-  }
+  for (; isa<PHINode>(I); ++I);
 
-  for (;  I != IE; ++I) {
+  for (;  I != IE; ++I)
     H.add(I->getOpcode());
-  }
-
-  if (calculateTerminatorInstruction) {
-    assert(IE->isTerminator());
-    H.add(IE->getOpcode());
-  }
-
   return H.getHash();
 }
-
-//AttributeList unnecessaryAttributes
 
 int BBComparator::compare() {
   sn_mapL.clear();

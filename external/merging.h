@@ -62,8 +62,7 @@ public:
   /// functions will have different hashes with high probability.
   typedef uint64_t BasicBlockHash;
 
-  static BasicBlockHash basicBlockHash(BasicBlock &, const bool calculatePhiNodes,
-                                       const bool calculateTerminatorInstruction);
+  static BasicBlockHash basicBlockHash(const BasicBlock &);
 
 private:
   /// Test whether two basic blocks have equivalent behaviour.

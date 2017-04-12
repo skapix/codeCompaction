@@ -27,6 +27,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
+
 #include <deque>
 #include <easy/profiler.h>
 
@@ -50,7 +51,7 @@ static cl::opt<std::string> MergeSpecialBB(
     "bbfactor-basic-block", cl::Hidden,
     cl::desc("Merge BBs, when at least one BB name equals to specified"));
 
-// TODO: ? place BB comparing in this file
+// TODO: separate comparing and merging
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -62,10 +63,7 @@ class BBNode {
 public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
   BBNode(BasicBlock *BB)
-      : BB(BB), Hash(BBComparator::basicBlockHash(*BB, false, false)) {}
-
-  BBNode(BasicBlock *BB, const BBComparator::BasicBlockHash Hash)
-      : BB(BB), Hash(Hash) {}
+      : BB(BB), Hash(BBComparator::basicBlockHash(*BB)) {}
 
   BasicBlock *getBB() const { return BB; }
 
@@ -123,6 +121,8 @@ void BBFactoring::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfoWrapperPass>();
 }
 
+static bool skipFromMerging(const BasicBlock *BB);
+
 bool BBFactoring::runOnModule(Module &M) {
 #ifndef	NDEBUG
 #warning Comparing in debug mode
@@ -135,46 +135,43 @@ bool BBFactoring::runOnModule(Module &M) {
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
 
   EASY_BLOCK("BB comparing");
-  std::vector<std::pair<BBComparator::BasicBlockHash, BasicBlock *>> HashedBBs;
+  std::vector<BBNode> HashedBBs;
 
   // calculate hashes for all basic blocks in every function
   for (auto &F : M.functions()) {
     if (!F.isDeclaration() && !F.hasAvailableExternallyLinkage()) {
       for (auto &BB : F.getBasicBlockList())
-        HashedBBs.push_back(
-            {BBComparator::basicBlockHash(BB, false, false), &BB});
+        HashedBBs.emplace_back(&BB);
     }
   }
   EASY_END_BLOCK;
 
   EASY_BLOCK("BB preparing to merge");
-  std::vector<SmallVector<BasicBlock *, 16>> IdenticalBlocksContainer;
-  auto BBTree = std::map<BBNode, size_t, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
+  using VectorOfBBs = SmallVector<BasicBlock *, 16>;
+  auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   // merge hashed values into map
-  for (auto It = HashedBBs.begin(), Ite = HashedBBs.end(); It != Ite; ++It) {
-    auto InsertedBBNode = BBTree.insert(std::make_pair(
-        BBNode(It->second, It->first), IdenticalBlocksContainer.size()));
-    if (InsertedBBNode.second) {
-      IdenticalBlocksContainer.emplace_back(1, It->second);
-    } else {
-      IdenticalBlocksContainer[InsertedBBNode.first->second].push_back(
-          It->second);
+  for (const auto &Node : HashedBBs) {
+    BasicBlock *BB = Node.getBB();
+    if (skipFromMerging(BB))
+      continue;
+
+    auto InsertedBBNode = BBTree.insert(std::make_pair(Node, VectorOfBBs({BB})));
+    if (!InsertedBBNode.second) {
+      InsertedBBNode.first->second.push_back(BB);
     }
   }
   EASY_END_BLOCK;
 
-  auto RemoveIf = [&IdenticalBlocksContainer](
+  auto RemoveIf = [&BBTree](
                       const std::function<bool(const BasicBlock *)> &F) {
-    for (auto It = IdenticalBlocksContainer.begin(),
-              EIt = IdenticalBlocksContainer.end();
-         It != EIt;) {
-      bool Exists = any_of(*It, F);
+    for (auto It = BBTree.begin(), EIt = BBTree.end(); It != EIt;) {
+      bool Exists = any_of(It->second, F);
       if (Exists)
         ++It;
       else {
-        It = IdenticalBlocksContainer.erase(It);
-        EIt = IdenticalBlocksContainer.end();
+        It = BBTree.erase(It);
+        EIt = BBTree.end();
       }
     }
   };
@@ -203,9 +200,9 @@ bool BBFactoring::runOnModule(Module &M) {
   assert(DM.get() && "DM was not created properly");
 
   EASY_BLOCK("BB merging");
-  for (auto &IdenticalBlocks : IdenticalBlocksContainer) {
-    if (IdenticalBlocks.size() >= 2) {
-      Changed |= replace(IdenticalBlocks, DM.get());
+  for (auto &IdenticalBlocks : BBTree) {
+    if (IdenticalBlocks.second.size() >= 2) {
+      Changed |= replace(IdenticalBlocks.second, DM.get());
     }
   }
   EASY_END_BLOCK;
@@ -245,6 +242,24 @@ static void debugPrint(const BasicBlock *BB, const StringRef Str = "",
                << ". Function: " << BB->getParent()->getName()
                << (NewLine ? '\n' : ' '));
 }
+
+static bool skipFromMerging(const BasicBlock *BB) {
+  if (BB->size() <= 3)
+    return true;
+
+  if (BB->isLandingPad()) {
+    debugPrint(BB, "Block family is a landing pad. Skip it");
+    return true;
+  }
+
+  long BBsSize = std::distance(getBeginIt(BB), getEndIt(BB));
+  if (BBsSize <= 2) {
+    debugPrint(BB, "Block family is too small to bother merging");
+    return true;
+  }
+  return false;
+}
+
 
 /// The way of representing output and skipped instructions of basic blocks
 using BBInstIds = SmallVector<size_t, 8>;
@@ -1197,19 +1212,7 @@ static bool beforeReturnBaseBlock(const BasicBlock *BB,
 bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
                           IProceduralAbstractionCost *PAC) {
   assert(BBs.size() >= 2 && "No sence in merging");
-  if (BBs.front()->size() <= 3)
-    return false;
-
-  if (BBs.front()->isLandingPad()) {
-    debugPrint(BBs.front(), "Block family is a landing pad. Skip it");
-    return false;
-  }
-
-  long BBsSize = std::distance(getBeginIt(BBs.front()), getEndIt(BBs.front()));
-  if (BBsSize <= 2) {
-    debugPrint(BBs.front(), "Block family is too small to bother merging");
-    return false;
-  }
+  assert(!skipFromMerging(BBs.front()) && "BB shouldn't be merged");
 
   auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(
       *BBs.front()->getParent());
