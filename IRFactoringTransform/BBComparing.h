@@ -1,4 +1,4 @@
-//===- merging.h - Merge identical ----------------------------------------===//
+//===- BBComparing.h - Comparing basic blocks -----------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TRANSFORMS_MERGING_H
-#define LLVM_TRANSFORMS_MERGING_H
+#ifndef LLVMTRANSFORM_BBCOMPARING_H
+#define LLVMTRANSFORM_BBCOMPARING_H
 
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Instructions.h"
@@ -40,7 +40,7 @@ public:
     bool Inserted;
     std::tie(MapIter, Inserted) = GlobalNumbers.insert({Global, NextNumber});
     if (Inserted)
-      NextNumber++;
+      ++NextNumber;
     return MapIter->second;
   }
 
@@ -53,7 +53,7 @@ class BBComparator {
 public:
   BBComparator(const BasicBlock *BB1, const BasicBlock *BB2,
                GlobalNumberState *GN)
-      : BBL(BB1), BBR(BB2), GlobalNumbers(GN) {}
+    : BBL(BB1), BBR(BB2), GlobalNumbers(GN) {}
 
   /// Test whether the two basic blocks have equivalent behaviour.
   int compare();
@@ -343,4 +343,4 @@ private:
 
 } // namespace llvm
 
-#endif // LLVM_TRANSFORMS_MERGING_H
+#endif //LLVMTRANSFORM_BBCOMPARING_H

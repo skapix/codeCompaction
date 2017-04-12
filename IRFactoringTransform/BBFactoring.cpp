@@ -22,7 +22,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "../external/merging.h"
+#include "BBComparing.h"
 #include "ForceMergePAC.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -51,6 +51,7 @@ static cl::opt<std::string> MergeSpecialBB(
     cl::desc("Merge BBs, when at least one BB name equals to specified"));
 
 // TODO: separate comparing and merging
+// TODO: rename pass to bbmerge and BBFactoring -> BBMerging
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -61,8 +62,7 @@ class BBNode {
 
 public:
   // Note the hash is recalculated potentially multiple times, but it is cheap.
-  BBNode(BasicBlock *BB)
-      : BB(BB), Hash(BBComparator::basicBlockHash(*BB)) {}
+  BBNode(BasicBlock *BB) : BB(BB), Hash(BBComparator::basicBlockHash(*BB)) {}
 
   BasicBlock *getBB() const { return BB; }
 
@@ -93,17 +93,61 @@ private:
 
   /// Comparator for BBNode
   class BBNodeCmp {
-    GlobalNumberState *GlobalNumbers;
+    enum
+    {
+      ArraySize = 3
+    };
+    using BaseHashElem = std::tuple<uintptr_t, uintptr_t, int>;
+    mutable struct SmallHashMap {
+      BaseHashElem Elems[ArraySize];
+      SmallHashMap() : Elems({std::make_tuple(0, 0, 0)}) {};
+      size_t idx = 0;
 
+      void push_back(uintptr_t V1, uintptr_t V2, int R) {
+        if (V1 > V2)
+          Elems[idx] = std::make_tuple(V2, V1, -1 * R);
+        else
+          Elems[idx] = std::make_tuple(V1, V2, R);
+        idx = (idx + 1) % ArraySize;
+      }
+
+      Optional<int> getResult(uintptr_t V1, uintptr_t V2) const {
+        int Mult = 1;
+        if (V1 > V2) {
+          std::swap(V1, V2);
+          Mult = -1;
+        }
+
+        for (size_t i = 0; i < ArraySize; ++i) {
+          if (std::get<0>(Elems[i]) == V1 && std::get<1>(Elems[i]) == V2)
+            return std::get<2>(Elems[i]) * Mult;
+        }
+        return Optional<int>();
+      }
+
+    } LastHasher;
+
+    GlobalNumberState *GlobalNumbers;
   public:
     BBNodeCmp(GlobalNumberState *GN) : GlobalNumbers(GN) {}
 
     bool operator()(const BBNode &LHS, const BBNode &RHS) const {
       // Order first by hashes, then full function comparison.
+
       if (LHS.getHash() != RHS.getHash())
         return LHS.getHash() < RHS.getHash();
+      Optional<int> Hashed = LastHasher.getResult(reinterpret_cast<uintptr_t >(LHS.getBB()),
+                                                  reinterpret_cast<uintptr_t >(RHS.getBB()));
+
+      if (Hashed)
+        return *Hashed == -1;
+
       BBComparator BBCmp(LHS.getBB(), RHS.getBB(), GlobalNumbers);
-      return BBCmp.compare() == -1;
+      int Result = BBCmp.compare();
+      LastHasher.push_back(reinterpret_cast<uintptr_t >(LHS.getBB()),
+                           reinterpret_cast<uintptr_t >(RHS.getBB()), Result);
+
+      return Result == -1;
     }
   };
 
@@ -135,27 +179,24 @@ bool BBFactoring::runOnModule(Module &M) {
   for (auto &F : M.functions()) {
     if (!F.isDeclaration() && !F.hasAvailableExternallyLinkage()) {
       for (auto &BB : F.getBasicBlockList())
-        HashedBBs.emplace_back(&BB);
+        if (!skipFromMerging(&BB))
+          HashedBBs.emplace_back(&BB);
     }
   }
 
   using VectorOfBBs = SmallVector<BasicBlock *, 16>;
-  auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
+  auto BBTree =
+      std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   // merge hashed values into map
   for (const auto &Node : HashedBBs) {
-    BasicBlock *BB = Node.getBB();
-    if (skipFromMerging(BB))
-      continue;
-
-    auto InsertedBBNode = BBTree.insert(std::make_pair(Node, VectorOfBBs({BB})));
-    if (!InsertedBBNode.second) {
-      InsertedBBNode.first->second.push_back(BB);
-    }
+    auto InsertedBBNode =
+        BBTree.insert(std::make_pair(Node, VectorOfBBs({Node.getBB()})));
+    if (!InsertedBBNode.second)
+      InsertedBBNode.first->second.push_back(Node.getBB());
   }
 
-  auto RemoveIf = [&BBTree](
-                      const std::function<bool(const BasicBlock *)> &F) {
+  auto RemoveIf = [&BBTree](const std::function<bool(const BasicBlock *)> &F) {
     for (auto It = BBTree.begin(), EIt = BBTree.end(); It != EIt;) {
       bool Exists = any_of(It->second, F);
       if (Exists)
@@ -249,7 +290,6 @@ static bool skipFromMerging(const BasicBlock *BB) {
   return false;
 }
 
-
 /// The way of representing output and skipped instructions of basic blocks
 using BBInstIds = SmallVector<size_t, 8>;
 using BBInstIdsImpl = SmallVectorImpl<size_t>;
@@ -322,9 +362,8 @@ static bool isInstUsedOutsideParent(const Instruction *I) {
   return false;
 }
 
-
 static bool isValUsedByInsts(const Value *V,
-                                    const SmallVectorImpl<Instruction *> &Insts) {
+                             const SmallVectorImpl<Instruction *> &Insts) {
   for (auto I : Insts) {
     for (auto &Op : I->operands()) {
       if (V == Op.get())
@@ -332,7 +371,6 @@ static bool isValUsedByInsts(const Value *V,
     }
   }
   return false;
-
 }
 
 /// Get values, that are created inside of \p BB and
@@ -1077,7 +1115,7 @@ createBBWithCall(const BBInfo &Info, Function *F,
        ++It, ++AllocaIt) {
     Instruction *CurrentInst = *It;
     if (!isInstUsedOutsideParent(CurrentInst) &&
-      !isValUsedByInsts(CurrentInst, UsedAfterFunction))
+        !isValUsedByInsts(CurrentInst, UsedAfterFunction))
       continue;
 
     auto BBLoadInst = Builder.CreateLoad(*AllocaIt);
@@ -1144,7 +1182,8 @@ static bool isMergeable(const BBInfo &Info, SmallVectorImpl<size_t> &Permut) {
     Permut.push_back(Id);
   }
 
-  auto FRetVal = cast<ReturnInst>(&F->front().back())->getReturnValue(); (void)FRetVal;
+  auto FRetVal = cast<ReturnInst>(&F->front().back())->getReturnValue();
+  (void)FRetVal;
   assert(
       (Info.getReturnValue() == nullptr || Info.getReturnValue() == FRetVal) &&
       "BBs are not equal");

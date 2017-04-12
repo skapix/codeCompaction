@@ -1,4 +1,4 @@
-//===- merging.cpp - Merge identical --------------------------------------===//
+//===- BBComparing.cpp - Comparing basic blocks ---------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "merging.h"
+#include "BBComparing.h"
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
@@ -24,17 +24,14 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueMap.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO.h"
 #include <vector>
 
 using namespace llvm;
 
-#define DEBUG_TYPE "mergefunc"
+#define DEBUG_TYPE "code_compare"
 
 
 int BBComparator::cmpNumbers(uint64_t L, uint64_t R) const {
@@ -87,14 +84,14 @@ int BBComparator::cmpMem(StringRef L, StringRef R) const {
 }
 
 int BBComparator::cmpAttrs(const AttributeList L,
-                                 const AttributeList R) const {
+                           const AttributeList R) const {
 
   if (int Res = cmpNumbers(L.getNumSlots(), R.getNumSlots()))
     return Res;
 
   for (unsigned i = 0, e = L.getNumSlots(); i != e; ++i) {
     AttributeList::iterator LI = L.begin(i), LE = L.end(i), RI = R.begin(i),
-        RE = R.end(i);
+      RE = R.end(i);
     for (; LI != LE && RI != RE; ++LI, ++RI) {
       Attribute LA = *LI;
       Attribute RA = *RI;
@@ -112,7 +109,7 @@ int BBComparator::cmpAttrs(const AttributeList L,
 }
 
 int BBComparator::cmpRangeMetadata(const MDNode *L,
-                                         const MDNode *R) const {
+                                   const MDNode *R) const {
   if (L == R)
     return 0;
   if (!L)
@@ -139,7 +136,7 @@ int BBComparator::cmpRangeMetadata(const MDNode *L,
 }
 
 int BBComparator::cmpOperandBundlesSchema(const Instruction *L,
-                                                const Instruction *R) const {
+                                          const Instruction *R) const {
   ImmutableCallSite LCS(L);
   ImmutableCallSite RCS(R);
 
@@ -147,7 +144,7 @@ int BBComparator::cmpOperandBundlesSchema(const Instruction *L,
   assert(LCS.isCall() == RCS.isCall() && "Can't compare otherwise!");
 
   if (int Res =
-      cmpNumbers(LCS.getNumOperandBundles(), RCS.getNumOperandBundles()))
+    cmpNumbers(LCS.getNumOperandBundles(), RCS.getNumOperandBundles()))
     return Res;
 
   for (unsigned i = 0, e = LCS.getNumOperandBundles(); i != e; ++i) {
@@ -170,7 +167,7 @@ int BBComparator::cmpOperandBundlesSchema(const Instruction *L,
 /// 2. Compare constant contents.
 /// For more details see declaration comments.
 int BBComparator::cmpConstants(const Constant *L,
-                                     const Constant *R) const {
+                               const Constant *R) const {
 
   Type *TyL = L->getType();
   Type *TyR = R->getType();
@@ -348,7 +345,7 @@ int BBComparator::cmpConstants(const Constant *L,
             return 1;
         }
         llvm_unreachable("Basic Block Address does not point to a basic block in "
-                             "its function.");
+                           "its function.");
         return -1;
       } else {
         // cmpValues will tell us if these are equivalent BasicBlocks, in the
@@ -390,7 +387,7 @@ int BBComparator::cmpTypes(Type *TyL, Type *TyR) const {
     default:
       llvm_unreachable("Unknown type!");
       // Fall through in Release mode.
-     // LLVM_FALLTHROUGH;
+      // LLVM_FALLTHROUGH;
     case Type::IntegerTyID:
       return cmpNumbers(cast<IntegerType>(TyL)->getBitWidth(),
                         cast<IntegerType>(TyR)->getBitWidth());
@@ -467,7 +464,7 @@ int BBComparator::cmpTypes(Type *TyL, Type *TyR) const {
 // Instruction::isSameOperationAs.
 // Read method declaration comments for more details.
 int BBComparator::cmpOperations(const Instruction *L,
-                                      const Instruction *R) const {
+                                const Instruction *R) const {
   // Differences from Instruction::isSameOperationAs:
   //  * replace type comparison with calls to cmpTypes.
   //  * we test for I->getRawSubclassOptionalData (nuw/nsw/tail) at the top.
@@ -489,7 +486,7 @@ int BBComparator::cmpOperations(const Instruction *L,
   // if all operands are the same type
   for (unsigned i = 0, e = L->getNumOperands(); i != e; ++i) {
     if (int Res =
-        cmpTypes(L->getOperand(i)->getType(), R->getOperand(i)->getType()))
+      cmpTypes(L->getOperand(i)->getType(), R->getOperand(i)->getType()))
       return Res;
   }
 
@@ -504,26 +501,26 @@ int BBComparator::cmpOperations(const Instruction *L,
     if (int Res = cmpNumbers(LI->isVolatile(), cast<LoadInst>(R)->isVolatile()))
       return Res;
     if (int Res =
-        cmpNumbers(LI->getAlignment(), cast<LoadInst>(R)->getAlignment()))
+      cmpNumbers(LI->getAlignment(), cast<LoadInst>(R)->getAlignment()))
       return Res;
     if (int Res =
-        cmpOrderings(LI->getOrdering(), cast<LoadInst>(R)->getOrdering()))
+      cmpOrderings(LI->getOrdering(), cast<LoadInst>(R)->getOrdering()))
       return Res;
     if (int Res =
-        cmpNumbers(LI->getSynchScope(), cast<LoadInst>(R)->getSynchScope()))
+      cmpNumbers(LI->getSynchScope(), cast<LoadInst>(R)->getSynchScope()))
       return Res;
     return cmpRangeMetadata(LI->getMetadata(LLVMContext::MD_range),
                             cast<LoadInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const StoreInst *SI = dyn_cast<StoreInst>(L)) {
     if (int Res =
-        cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
+      cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
       return Res;
     if (int Res =
-        cmpNumbers(SI->getAlignment(), cast<StoreInst>(R)->getAlignment()))
+      cmpNumbers(SI->getAlignment(), cast<StoreInst>(R)->getAlignment()))
       return Res;
     if (int Res =
-        cmpOrderings(SI->getOrdering(), cast<StoreInst>(R)->getOrdering()))
+      cmpOrderings(SI->getOrdering(), cast<StoreInst>(R)->getOrdering()))
       return Res;
     return cmpNumbers(SI->getSynchScope(), cast<StoreInst>(R)->getSynchScope());
   }
@@ -534,26 +531,26 @@ int BBComparator::cmpOperations(const Instruction *L,
                              cast<CallInst>(R)->getCallingConv()))
       return Res;
     if (int Res =
-        cmpAttrs(CI->getAttributes(), cast<CallInst>(R)->getAttributes()))
+      cmpAttrs(CI->getAttributes(), cast<CallInst>(R)->getAttributes()))
       return Res;
     if (int Res = cmpOperandBundlesSchema(CI, R))
       return Res;
     return cmpRangeMetadata(
-        CI->getMetadata(LLVMContext::MD_range),
-        cast<CallInst>(R)->getMetadata(LLVMContext::MD_range));
+      CI->getMetadata(LLVMContext::MD_range),
+      cast<CallInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const InvokeInst *II = dyn_cast<InvokeInst>(L)) {
     if (int Res = cmpNumbers(II->getCallingConv(),
                              cast<InvokeInst>(R)->getCallingConv()))
       return Res;
     if (int Res =
-        cmpAttrs(II->getAttributes(), cast<InvokeInst>(R)->getAttributes()))
+      cmpAttrs(II->getAttributes(), cast<InvokeInst>(R)->getAttributes()))
       return Res;
     if (int Res = cmpOperandBundlesSchema(II, R))
       return Res;
     return cmpRangeMetadata(
-        II->getMetadata(LLVMContext::MD_range),
-        cast<InvokeInst>(R)->getMetadata(LLVMContext::MD_range));
+      II->getMetadata(LLVMContext::MD_range),
+      cast<InvokeInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const InsertValueInst *IVI = dyn_cast<InsertValueInst>(L)) {
     ArrayRef<unsigned> LIndices = IVI->getIndices();
@@ -578,7 +575,7 @@ int BBComparator::cmpOperations(const Instruction *L,
   }
   if (const FenceInst *FI = dyn_cast<FenceInst>(L)) {
     if (int Res =
-        cmpOrderings(FI->getOrdering(), cast<FenceInst>(R)->getOrdering()))
+      cmpOrderings(FI->getOrdering(), cast<FenceInst>(R)->getOrdering()))
       return Res;
     return cmpNumbers(FI->getSynchScope(), cast<FenceInst>(R)->getSynchScope());
   }
@@ -590,12 +587,12 @@ int BBComparator::cmpOperations(const Instruction *L,
                              cast<AtomicCmpXchgInst>(R)->isWeak()))
       return Res;
     if (int Res =
-        cmpOrderings(CXI->getSuccessOrdering(),
-                     cast<AtomicCmpXchgInst>(R)->getSuccessOrdering()))
+      cmpOrderings(CXI->getSuccessOrdering(),
+                   cast<AtomicCmpXchgInst>(R)->getSuccessOrdering()))
       return Res;
     if (int Res =
-        cmpOrderings(CXI->getFailureOrdering(),
-                     cast<AtomicCmpXchgInst>(R)->getFailureOrdering()))
+      cmpOrderings(CXI->getFailureOrdering(),
+                   cast<AtomicCmpXchgInst>(R)->getFailureOrdering()))
       return Res;
     return cmpNumbers(CXI->getSynchScope(),
                       cast<AtomicCmpXchgInst>(R)->getSynchScope());
@@ -620,7 +617,7 @@ int BBComparator::cmpOperations(const Instruction *L,
     // are also identical.
     for (unsigned i = 0, e = PNL->getNumIncomingValues(); i != e; ++i) {
       if (int Res =
-          cmpValues(PNL->getIncomingBlock(i), PNR->getIncomingBlock(i)))
+        cmpValues(PNL->getIncomingBlock(i), PNR->getIncomingBlock(i)))
         return Res;
     }
   }
@@ -630,7 +627,7 @@ int BBComparator::cmpOperations(const Instruction *L,
 // Determine whether two GEP operations perform the same underlying arithmetic.
 // Read method declaration comments for more details.
 int BBComparator::cmpGEPs(const GEPOperator *GEPL,
-                                const GEPOperator *GEPR) const {
+                          const GEPOperator *GEPR) const {
 
   unsigned int ASL = GEPL->getPointerAddressSpace();
   unsigned int ASR = GEPR->getPointerAddressSpace();
@@ -662,7 +659,7 @@ int BBComparator::cmpGEPs(const GEPOperator *GEPL,
 }
 
 int BBComparator::cmpInlineAsm(const InlineAsm *L,
-                                     const InlineAsm *R) const {
+                               const InlineAsm *R) const {
   // InlineAsm's are uniqued. If they are the same pointer, obviously they are
   // the same, otherwise compare the fields.
   if (L == R)
@@ -724,14 +721,14 @@ int BBComparator::cmpValues(const Value *L, const Value *R) const {
     return -1;
 
   auto LeftSN = sn_mapL.insert(std::make_pair(L, sn_mapL.size())),
-      RightSN = sn_mapR.insert(std::make_pair(R, sn_mapR.size()));
+    RightSN = sn_mapR.insert(std::make_pair(R, sn_mapR.size()));
 
   return cmpNumbers(LeftSN.first->second, RightSN.first->second);
 }
 // Test whether two basic blocks have equivalent behaviour,
 // except termination instruction
 int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
-                                       const BasicBlock *BBR) const {
+                                 const BasicBlock *BBR) const {
   // minimum BB size equals to 1 and if so, this instruction is TermInst,
   // that is not checked
   if (BBL->size() == 1 || BBR->size() == 1)
@@ -767,7 +764,7 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
 
     if (GEPL && GEPR) {
       if (int Res =
-          cmpValues(GEPL->getPointerOperand(), GEPR->getPointerOperand()))
+        cmpValues(GEPL->getPointerOperand(), GEPR->getPointerOperand()))
         return Res;
       if (int Res = cmpGEPs(GEPL, GEPR))
         return Res;
@@ -862,18 +859,18 @@ int BBComparator::compare() {
   sn_mapL.clear();
   sn_mapR.clear();
   static const AttributeList unnecessaryAttributes = AttributeList().
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::ReadOnly).
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::WriteOnly).
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::JumpTable).
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::Naked).
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoReturn).
-      addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoRecurse).
-      addAttribute(BBL->getContext(),AttributeList::FunctionIndex, Attribute::ReadNone);
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::ReadOnly).
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::WriteOnly).
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::JumpTable).
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::Naked).
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoReturn).
+    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoRecurse).
+    addAttribute(BBL->getContext(),AttributeList::FunctionIndex, Attribute::ReadNone);
 
   auto AttributesLF =  BBL->getParent()->getAttributes().removeAttributes(
-      BBL->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
+    BBL->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
   auto AttributesRF =  BBR->getParent()->getAttributes().removeAttributes(
-      BBR->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
+    BBR->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
   if (int Res = cmpAttrs(AttributesLF, AttributesRF))
     return Res;
 
