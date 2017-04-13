@@ -9,29 +9,18 @@
 
 #include "CompareBB.h"
 
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/CallSite.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Operator.h"
-#include "llvm/IR/ValueHandle.h"
-#include "llvm/IR/ValueMap.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-#include <vector>
 
 using namespace llvm;
 
-#define DEBUG_TYPE "code_compare"
+#define DEBUG_TYPE "compareBB"
 
 
 int BBComparator::cmpNumbers(uint64_t L, uint64_t R) const {
@@ -371,7 +360,6 @@ int BBComparator::cmpTypes(Type *TyL, Type *TyR) const {
   PointerType *PTyL = dyn_cast<PointerType>(TyL);
   PointerType *PTyR = dyn_cast<PointerType>(TyR);
 
-  const DataLayout &DL = BBL->getParent()->getParent()->getDataLayout();
   if (PTyL && PTyL->getAddressSpace() == 0)
     TyL = DL.getIntPtrType(TyL);
   if (PTyR && PTyR->getAddressSpace() == 0)
@@ -637,7 +625,6 @@ int BBComparator::cmpGEPs(const GEPOperator *GEPL,
 
   // When we have target data, we can reduce the GEP down to the value in bytes
   // added to the address.
-  const DataLayout &DL = BBL->getParent()->getParent()->getDataLayout();
   unsigned BitWidth = DL.getPointerSizeInBits(ASL);
   APInt OffsetL(BitWidth, 0), OffsetR(BitWidth, 0);
   if (GEPL->accumulateConstantOffset(DL, OffsetL) &&
@@ -686,17 +673,6 @@ int BBComparator::cmpInlineAsm(const InlineAsm *L,
 /// See comments in declaration for more details.
 int BBComparator::cmpValues(const Value *L, const Value *R) const {
   // Catch self-reference case.
-  if (L == BBL) {
-    if (R == BBR)
-      return 0;
-    return -1;
-  }
-  if (R == BBR) {
-    if (L == BBL)
-      return 0;
-    return 1;
-  }
-
   const Constant *ConstL = dyn_cast<Constant>(L);
   const Constant *ConstR = dyn_cast<Constant>(R);
   if (ConstL && ConstR) {
@@ -855,7 +831,7 @@ BBComparator::BasicBlockHash BBComparator::basicBlockHash(const BasicBlock &BB) 
   return H.getHash();
 }
 
-int BBComparator::compare() {
+int BBComparator::compare(const BasicBlock *BBL, const BasicBlock *BBR) const {
   sn_mapL.clear();
   sn_mapR.clear();
   static const AttributeList unnecessaryAttributes = AttributeList().

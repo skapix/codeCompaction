@@ -1,4 +1,4 @@
-//===-- BBFactoring.cpp - Merge identical basic blocks -------*- C++ -*-===//
+//===-- MergeBB.cpp - Merge identical basic blocks -------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,12 +12,12 @@
 /// them.
 /// Bacic blocks comparison is almost the same as in MergeFunctions.cpp, but
 /// with commutativity check and without checking phi values and term insts,
-/// because these instructions are not part of our factored BB.
+/// because these instructions are not part of our merged BB.
 /// After finding identity BBs, pass creates new function (if necessary)
-/// and replaces the factored BB with tail call to the appropriate function.
+/// and replaces the merged BB with tail call to the appropriate function.
 /// Pass works only with well-formed basic blocks.
-/// Definition: Factored BB is the part of Basic Block, which can be replaced
-/// with this pass. Factored BB consists of the whole BB without Phi nodes and
+/// Definition: Merged BB is the part of Basic Block, which can be replaced
+/// with this pass. Merged BB consists of the whole BB without Phi nodes and
 /// terminator instructions.
 ///
 //===----------------------------------------------------------------------===//
@@ -52,8 +52,6 @@ static cl::opt<std::string> MergeSpecialBB(
     cl::desc("Merge group of identical BBs,"
                "if at least one BB name equals to specified"));
 
-// TODO: separate comparing and merging
-
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
 /// Used BB for comparison
@@ -70,8 +68,8 @@ public:
   BBComparator::BasicBlockHash getHash() const { return Hash; }
 };
 
-/// BBFactoring finds basic blocks which will generate identical machine code
-/// Once identified, BBFactoring will fold them by replacing these basic blocks
+/// MergeBB finds basic blocks which will generate identical machine code
+/// Once identified, MergeBB will fold them by replacing these basic blocks
 /// with a call to a function.
 class MergeBB : public ModulePass {
 public:
@@ -128,9 +126,9 @@ private:
 
     } LastHasher;
 
-    GlobalNumberState *GlobalNumbers;
+    BBComparator BBCmp;
   public:
-    BBNodeCmp(GlobalNumberState *GN) : GlobalNumbers(GN) {}
+    BBNodeCmp(GlobalNumberState *GN, const DataLayout &DL) : BBCmp(GN, DL) {}
 
     bool operator()(const BBNode &LHS, const BBNode &RHS) const {
       // Order first by hashes, then full function comparison.
@@ -143,8 +141,7 @@ private:
       if (Hashed)
         return *Hashed == -1;
 
-      BBComparator BBCmp(LHS.getBB(), RHS.getBB(), GlobalNumbers);
-      int Result = BBCmp.compare();
+      int Result = BBCmp.compare(LHS.getBB(), RHS.getBB());
       LastHasher.push_back(reinterpret_cast<uintptr_t >(LHS.getBB()),
                            reinterpret_cast<uintptr_t >(RHS.getBB()), Result);
 
@@ -186,8 +183,8 @@ bool MergeBB::runOnModule(Module &M) {
   }
 
   using VectorOfBBs = SmallVector<BasicBlock *, 16>;
-  auto BBTree =
-      std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
+  auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(
+    BBNodeCmp(&GlobalNumbers, M.getDataLayout()));
 
   // merge hashed values into map
   for (const auto &Node : HashedBBs) {
@@ -241,7 +238,7 @@ bool MergeBB::runOnModule(Module &M) {
   return Changed;
 }
 
-/// \return end iterator of the factored part of \p BB
+/// \return end iterator of the merged part of \p BB
 static inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
   assert(isa<TerminatorInst>(BB->back()));
   return std::prev(BB->end());
@@ -252,7 +249,7 @@ static inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
   return std::prev(BB->end());
 }
 
-/// \return begin iterator of the factored part of \p BB
+/// \return begin iterator of the merged part of \p BB
 static inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
   auto It = BB->begin();
   while (isa<PHINode>(It))
@@ -803,10 +800,10 @@ BBInfo &BBInfo::operator=(const BBInfo &Other) {
   return *this;
 }
 
-/// \return Values, that were created outside of the factored \p BB
+/// \return Values, that were created outside of the merged \p BB
 static SmallVector<Value *, 8> getInput(BasicBlock *BB,
                                         const SpecialInstsIds &SpecialInsts) {
-  // Values, created by factored BB or inserted into Result as Input
+  // Values, created by merged BB or inserted into Result as Input
   DenseSet<const Value *> Values;
   SmallVector<Value *, 8> Result;
 
