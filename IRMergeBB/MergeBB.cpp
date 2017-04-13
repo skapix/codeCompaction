@@ -22,7 +22,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "BBComparing.h"
+#include "CompareBB.h"
 #include "ForceMergePAC.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -30,28 +30,29 @@
 
 #include <deque>
 
-#define DEBUG_TYPE "bbfactor"
+#define DEBUG_TYPE "mergebb"
 
-STATISTIC(MergeCounter, "Counts total number of merged basic blocks");
-STATISTIC(FunctionCounter, "Counts amount of created functions");
+STATISTIC(MergeCounter, "Number of merged basic blocks");
+STATISTIC(FunctionCounter, "Amount of created functions");
 
 using namespace llvm;
 
 static cl::opt<bool>
-    ForceMerge("bbfactor-force-merging", cl::Hidden, cl::init(false),
+    ForceMerge("mergebb-force", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
 
 static cl::opt<std::string> MergeSpecialFunction(
-    "bbfactor-function", cl::Hidden,
+    "mergebb-function", cl::Hidden,
     cl::desc(
-        "Merge BBs, when at least one BB from this set has specified parent"));
+        "Merge group of identical BBs,"
+          "if at least one BB from this set has specified parent"));
 
 static cl::opt<std::string> MergeSpecialBB(
-    "bbfactor-basic-block", cl::Hidden,
-    cl::desc("Merge BBs, when at least one BB name equals to specified"));
+    "mergebb-bb", cl::Hidden,
+    cl::desc("Merge group of identical BBs,"
+               "if at least one BB name equals to specified"));
 
 // TODO: separate comparing and merging
-// TODO: rename pass to bbmerge and BBFactoring -> BBMerging
 
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
@@ -72,11 +73,11 @@ public:
 /// BBFactoring finds basic blocks which will generate identical machine code
 /// Once identified, BBFactoring will fold them by replacing these basic blocks
 /// with a call to a function.
-class BBFactoring : public ModulePass {
+class MergeBB : public ModulePass {
 public:
   static char ID;
 
-  BBFactoring() : ModulePass(ID) {}
+  MergeBB() : ModulePass(ID) {}
 
   virtual void getAnalysisUsage(AnalysisUsage &Info) const override;
 
@@ -156,17 +157,17 @@ private:
 
 } // end anonymous namespace
 
-char BBFactoring::ID = 0;
-static RegisterPass<BBFactoring> X("bbfactor", "BBFactoring Pass", false,
+char MergeBB::ID = 0;
+static RegisterPass<MergeBB> X("mergebb", "Merge basic blocks", false,
                                    false);
 
-void BBFactoring::getAnalysisUsage(AnalysisUsage &AU) const {
+void MergeBB::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfoWrapperPass>();
 }
 
 static bool skipFromMerging(const BasicBlock *BB);
 
-bool BBFactoring::runOnModule(Module &M) {
+bool MergeBB::runOnModule(Module &M) {
   if (skipModule(M))
     return false;
 
@@ -1237,7 +1238,7 @@ static bool beforeReturnBaseBlock(const BasicBlock *BB,
 /// 4) Replace Basic blocks with factored out function.
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
-bool BBFactoring::replace(const SmallVectorImpl<BasicBlock *> &BBs,
+bool MergeBB::replace(const SmallVectorImpl<BasicBlock *> &BBs,
                           IProceduralAbstractionCost *PAC) {
   assert(BBs.size() >= 2 && "No sence in merging");
   assert(!skipFromMerging(BBs.front()) && "BB shouldn't be merged");

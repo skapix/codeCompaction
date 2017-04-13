@@ -1,4 +1,4 @@
-; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s | FileCheck %s
+; RUN: opt -S -load  %opt_path %pass_name %force_flag < %s | FileCheck %s
 ; RUN: %lli_comp -v %s
 
 %struct.S = type { i32, i8, %struct.S* }

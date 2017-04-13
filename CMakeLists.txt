@@ -23,7 +23,7 @@ if (NOT MSVC)
   endif(NOT LLVM_ENABLE_RTTI)
 endif(NOT MSVC)
 
-set(pass_name IRFactoringTransform)
+set(pass_name IRMergeBB)
 
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})

@@ -5,7 +5,7 @@ import argparse
 import tempfile
 import atexit
 from utilities.functions import getExt, createOptCompile
-from utilities.constants import g_cyellow, g_cgreen, g_cend, g_lli
+from utilities.constants import g_optimization_force, g_cyellow, g_cgreen, g_cend, g_lli
 from utilities.compile import createProcess
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -36,7 +36,7 @@ def checkFileCorrectness(filename, isVerbose):
 
     comp = createOptCompile(filename)
     comp.outputFile = tmpFile
-    comp.compile("-bbfactor-force-merging")
+    comp.compile(g_optimization_force)
     original = getLLiOutput(filename)
     modified = getLLiOutput(tmpFile)
     if isVerbose and original != modified:

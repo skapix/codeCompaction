@@ -1,5 +1,5 @@
 ; check, that it optimizes without errors
-; RUN: opt -S -load  %opt_path -bbfactor -bbfactor-force-merging < %s
+; RUN: opt -S -load  %opt_path %pass_name %force_flag < %s
 ; RUN: %lli_comp -v %s
 
 %"class.std::exception" = type { i32 (...)** }

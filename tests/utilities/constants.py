@@ -2,8 +2,9 @@
 
 import os
 
-g_optimization = "-bbfactor"
-g_loadOptimization = os.path.dirname(os.path.abspath(__file__)) + "/../../build/libIRFactoringTransform.so"
+g_optimization = "-mergebb"
+g_optimization_force = "-mergebb-force"
+g_loadOptimization = os.path.dirname(os.path.abspath(__file__)) + "/../../build/libIRMergeBB.so"
 
 g_opt = "opt"
 g_lli = "lli"
@@ -11,10 +12,6 @@ g_link = "llvm-link"
 
 g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
 g_testPath = os.path.dirname(os.path.abspath(__file__)) + "/testCases"
-
-# function identificator
-g_startStrIdent = "define "
-g_identLen = len(g_startStrIdent)
 
 g_armInclude = "/usr/arm-linux-gnueabihf/include/"
 g_armIncludeCpp1 = g_armInclude + "c++/6.3.1/"

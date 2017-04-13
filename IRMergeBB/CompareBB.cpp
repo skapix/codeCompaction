@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "BBComparing.h"
+#include "CompareBB.h"
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
