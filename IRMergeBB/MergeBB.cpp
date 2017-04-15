@@ -52,6 +52,15 @@ static cl::opt<std::string> MergeSpecialBB(
     cl::desc("Merge group of identical BBs,"
                "if at least one BB name equals to specified"));
 
+static cl::opt<uint32_t> MinActualBlockSize(
+  "mergebb-threshold", cl::Hidden, cl::init(2),
+  cl::desc("Sizes of basic block, that are equal or less the specified"
+             "will be skipped from merging"));
+
+static cl::opt<int> AddBlockWeight(
+  "mergebb-addWeight", cl::Hidden, cl::init(0),
+  cl::desc("Additional weight to the created block"));
+
 namespace {
 /// Auxiliary class, that holds basic block and it's hash.
 /// Used BB for comparison
@@ -226,7 +235,7 @@ bool MergeBB::runOnModule(Module &M) {
   const StringRef Arch =
       StringRef(M.getTargetTriple()).take_front(M.getTargetTriple().find('-'));
   auto DM = ForceMerge ? make_unique<ForceMergePAC>()
-                       : IProceduralAbstractionCost::Create(Arch);
+                       : IProceduralAbstractionCost::Create(Arch, AddBlockWeight);
   assert(DM.get() && "DM was not created properly");
 
   for (auto &IdenticalBlocks : BBTree) {
@@ -272,7 +281,7 @@ static void debugPrint(const BasicBlock *BB, const StringRef Str = "",
 }
 
 static bool skipFromMerging(const BasicBlock *BB) {
-  if (BB->size() <= 3)
+  if (BB->size() <= MinActualBlockSize + 1)
     return true;
 
   if (BB->isLandingPad()) {
@@ -281,7 +290,7 @@ static bool skipFromMerging(const BasicBlock *BB) {
   }
 
   long BBsSize = std::distance(getBeginIt(BB), getEndIt(BB));
-  if (BBsSize <= 2) {
+  if (BBsSize <= MinActualBlockSize) {
     debugPrint(BB, "Block family is too small to bother merging");
     return true;
   }

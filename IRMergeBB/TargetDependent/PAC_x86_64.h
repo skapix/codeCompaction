@@ -20,6 +20,7 @@
 
 class PAC_x86_64 : public CommonPAC {
 public:
+  PAC_x86_64(int AddBlockWeight) : CommonPAC (AddBlockWeight) {}
   virtual void init(const llvm::TargetTransformInfo &TTI,
                     const InstructionLocation &I,
                     const llvm::BasicBlock::const_iterator &Begin,

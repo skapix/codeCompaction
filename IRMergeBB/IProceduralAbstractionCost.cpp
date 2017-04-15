@@ -16,21 +16,22 @@
 using namespace llvm;
 
 std::unique_ptr<IProceduralAbstractionCost>
-IProceduralAbstractionCost::Create(const StringRef Arch) {
+IProceduralAbstractionCost::Create(const StringRef Arch,
+                                   const int AddBlockWeight) {
   // TODO: if is far not the best option here. Fix it
   if (Arch == "")
-    return std::make_unique<CommonPAC>();
+    return std::make_unique<CommonPAC>(AddBlockWeight);
   if (Arch == "x86_64")
-    return std::make_unique<PAC_x86_64>();
+    return std::make_unique<PAC_x86_64>(AddBlockWeight);
   if (Arch.size() >= 3 && Arch.substr(0, 3) == "arm")
-    return std::make_unique<PAC_arm>();
+    return std::make_unique<PAC_arm>(AddBlockWeight);
 
   dbgs() << "Warning! Unknown architecture: " << Arch << "\n";
   dbgs() << "  For greater pass impact of code compaction, please, write a "
             "function"
             "for this arch, which calculates an Instruction weight.";
 
-  return std::make_unique<CommonPAC>();
+  return std::make_unique<CommonPAC>(AddBlockWeight);
 }
 
 void IProceduralAbstractionCost::setTail(const bool IsReallyTail) {

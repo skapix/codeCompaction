@@ -48,8 +48,10 @@ bool CommonPAC::isTiny() const { return FunctionWeight <= 2; }
 
 bool CommonPAC::replaceWithCall(const size_t InputArgs,
                                 const size_t OutputArgs) const {
-  return (IsTail && 1 < OriginalBlockWeight) ||
-         (getNewBlockWeight(InputArgs, OutputArgs) < OriginalBlockWeight);
+  if (IsTail && 1 < OriginalBlockWeight)
+    return true;
+
+  return         (getNewBlockWeight(InputArgs, OutputArgs) < OriginalBlockWeight);
 }
 
 bool CommonPAC::replaceWithCall(const size_t BBAmount, const size_t InputArgs,
@@ -106,7 +108,10 @@ size_t CommonPAC::getNewBlockWeight(const size_t InputArgs,
   // AllocaOutputs is multiplied by 2, because:
   //  1) move address to appropriate register (or push)
   //  2) after call extract value from allocated space
-  return NewBlockAddWeight + 1 + InputArgs + 2 * AllocaOutputs;
+  size_t Result = NewBlockAddWeight + 1 + InputArgs + 2 * AllocaOutputs;
+  if (AddBlockWeight < 0 && Result < static_cast<size_t>(-AddBlockWeight))
+    return 0;
+  return static_cast<size_t>(Result + AddBlockWeight);
 }
 
 size_t CommonPAC::getFunctionCreationWeight(const size_t InputArgs,

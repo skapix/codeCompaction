@@ -19,6 +19,7 @@
 
 class PAC_arm : public CommonPAC {
 public:
+  PAC_arm(int AddBlockWeight) : CommonPAC (AddBlockWeight) {}
   virtual void init(const llvm::TargetTransformInfo &TTI,
                     const InstructionLocation &I,
                     const llvm::BasicBlock::const_iterator &Begin,

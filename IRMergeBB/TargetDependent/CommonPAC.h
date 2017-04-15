@@ -22,6 +22,7 @@
 /// because weight can be not equal to amount of instruction
 class CommonPAC : public IProceduralAbstractionCost {
 public:
+  CommonPAC(int AddBlockWeight) : AddBlockWeight(AddBlockWeight) {}
   /// BlockWeight should be set in init, otherwise all methods should
   /// be overwritten
   virtual void init(const llvm::TargetTransformInfo &TTI,
@@ -72,6 +73,8 @@ protected:
                                            const size_t OutputArgs) const;
 
 protected:
+  const int AddBlockWeight;
+
   const llvm::TargetTransformInfo *TTI;
   size_t OriginalBlockWeight;
   size_t FunctionWeight;

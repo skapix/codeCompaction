@@ -44,5 +44,8 @@ size_t PAC_arm::getNewBlockWeight(const size_t InputArgs,
   //  3) Store parameter from stack pointer into register
   const size_t ParamOutputs = OutputArgs > 0 ? OutputArgs - 1 : 0;
   const size_t Penalty = OutputArgs > 0 ? OutputArgs - 1 : 0;
-  return NewBlockAddWeight + 1 + InputArgs + 3 * ParamOutputs + Penalty;
+  const size_t Result = NewBlockAddWeight + 1 + InputArgs + 3 * ParamOutputs + Penalty;
+  if (AddBlockWeight < 0 && Result < static_cast<size_t>(-AddBlockWeight))
+    return 0;
+  return static_cast<size_t>(Result + AddBlockWeight);
 }

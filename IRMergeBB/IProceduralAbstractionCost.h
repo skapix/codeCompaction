@@ -45,7 +45,7 @@ public:
   /// \param Arch final architecture of compiled file
   /// \return appropriate decision maker instance
   static std::unique_ptr<IProceduralAbstractionCost>
-  Create(const llvm::StringRef Arch);
+  Create(const llvm::StringRef Arch, int AddBlockWeight);
 
   /// Initialize decision maker with instructions \p Insts,
   /// that are going to be factored out
