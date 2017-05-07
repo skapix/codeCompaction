@@ -27,5 +27,5 @@ set(pass_name IRMergeBB)
 
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
-llvm_map_components_to_libnames(llvm_libs support core irreader)
+#llvm_map_components_to_libnames(llvm_libs support core irreader)
 add_subdirectory(${pass_name})

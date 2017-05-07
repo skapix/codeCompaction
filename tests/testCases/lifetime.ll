@@ -30,9 +30,9 @@ entry:
 
 ; CHECK: [[Al:%[_\.a-z0-9]+]] = alloca %struct.S
 ; CHECK-NEXT: [[BC:%[_\.a-z0-9]+]] = bitcast %struct.S* [[Al]] to i8*
-; CHECK-NEXT: call void @llvm.lifetime.start(i64 {{[0-9]+}}, i8* nonnull [[BC]])
+; CHECK-NEXT: call void @llvm.lifetime.start{{[\.A-Za-z0-9]*}}(i64 {{[0-9]+}}, i8* nonnull [[BC]])
 ; Decide what to do with GEPInsts
-; CHECK: call {{[a-z ]*}} i1  [[FName:@[_\.a-z0-9]+]]
+; CHECK: call {{[a-z ]*}} i1  [[FName:@[_\.A-Za-z0-9]+]]
 
 if.then:
   %1 = load i8, i8* %c, align 4

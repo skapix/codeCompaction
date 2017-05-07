@@ -9,7 +9,7 @@ entry:
   %cmp = icmp sge i32 %i, 0
   br i1 %cmp, label %if.then, label %if.else
 if.then:
-; CHECK: call{{[a-z ]*}} void [[FName:@[_\.a-z0-9]+]](i32 %i)
+; CHECK: call{{[a-z ]*}} void [[FName:@[_\.A-Za-z0-9]+]](i32 %i)
 ; CHECK-NEXT: ret i32 0
   %someCalc1 = mul nsw i32 %i, %i
   %someCalc2 = mul nsw i32 %i, %someCalc1

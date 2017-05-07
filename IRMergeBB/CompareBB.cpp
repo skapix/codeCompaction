@@ -17,6 +17,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -843,10 +844,13 @@ int BBComparator::compare(const BasicBlock *BBL, const BasicBlock *BBR) const {
     addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoRecurse).
     addAttribute(BBL->getContext(),AttributeList::FunctionIndex, Attribute::ReadNone);
 
+  static const AttrBuilder attrList(unnecessaryAttributes, AttributeList::FunctionIndex);
+
+
   auto AttributesLF =  BBL->getParent()->getAttributes().removeAttributes(
-    BBL->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
+    BBL->getContext(), AttributeList::FunctionIndex, attrList);
   auto AttributesRF =  BBR->getParent()->getAttributes().removeAttributes(
-    BBR->getContext(), AttributeList::FunctionIndex, unnecessaryAttributes);
+    BBR->getContext(), AttributeList::FunctionIndex, attrList);
   if (int Res = cmpAttrs(AttributesLF, AttributesRF))
     return Res;
 

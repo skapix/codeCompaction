@@ -21,7 +21,7 @@ less.zero:
 body:
 ; CHECK: phi i32
 ; CHECK-NEXT: phi i32
-; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName:@[_\.a-z0-9]+]]
+; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName:@[_\.A-Za-z0-9]+]]
 ; CHECK-NEXT: ret
   %phi1 = phi i32 [ %g.a, %greater.zero ], [ %l.a, %less.zero ]
   %phi2 = phi i32 [ %g.b, %greater.zero ], [ %l.b, %less.zero ]
@@ -51,7 +51,7 @@ less.zero:
 body:
 ; CHECK: phi i32
 ; CHECK-NEXT: phi i32
-; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName:@[_\.a-z0-9]+]]
+; CHECK-NEXT: call{{[a-z ]*}} i32 [[FName]]
 ; CHECK-NEXT: ret
   %phi1 = phi i32 [ %g.a, %greater.zero ], [ %l.a, %less.zero ]
   %phi2 = phi i32 [ %g.b, %greater.zero ], [ %l.b, %less.zero ]

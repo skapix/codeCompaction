@@ -7,7 +7,7 @@
 define i32 @foo(i32 %k) {
 entry:
 ; CHECK: [[P0:%[_\.a-z0-9]+]] = alloca i32
-; CHECK-NEXT: call{{[a-z ]*}} i32  [[FName:@[_\.a-z0-9]+]](i32 %k, i32* [[P0]])
+; CHECK-NEXT: call{{[a-z ]*}} i32  [[FName:@[_\.A-Za-z0-9]+]](i32 %k, i32* [[P0]])
 ; CHECK-NEXT: load i32, i32* [[P0]]
   %someCalc1 = add nsw i32 %k, 31
   %someCalc2 = mul nsw i32 %someCalc1, 5

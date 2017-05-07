@@ -7,7 +7,7 @@
 define i32 @foo(i32 %i) {
 ; CHECK-LABEL: @foo
 entry:
-  ; CHECK: call{{[a-z ]*}} {{i32*|void}} [[FName:@[_\.a-z0-9]+]]
+  ; CHECK: call{{[a-z ]*}} {{i32*|void}} [[FName:@[_\.A-Za-z0-9]+]]
   %s = alloca %struct.S, align 8
   %j = getelementptr inbounds %struct.S, %struct.S* %s, i64 0, i32 0
   store i32 %i, i32* %j, align 8
