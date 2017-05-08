@@ -10,20 +10,17 @@
 #ifndef LLVMTRANSFORM_BBCOMPARING_H
 #define LLVMTRANSFORM_BBCOMPARING_H
 
-#include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/ValueMap.h"
 
 namespace llvm {
 
 class GlobalValue;
 
-
 class GlobalNumberState {
   struct Config : ValueMapConfig<GlobalValue *> {
-    enum {
-      FollowRAUW = false
-    };
+    enum { FollowRAUW = false };
   };
   // Each GlobalValue is mapped to an identifier. The Config ensures when RAUW
   // occurs, the mapping does not change. Tracking changes is unnecessary, and
@@ -32,6 +29,7 @@ class GlobalNumberState {
   ValueNumberMap GlobalNumbers;
   // The next unused serial number to assign to a global.
   uint64_t NextNumber;
+
 public:
   GlobalNumberState() : GlobalNumbers(), NextNumber(0) {}
 
@@ -44,16 +42,13 @@ public:
     return MapIter->second;
   }
 
-  void clear() {
-    GlobalNumbers.clear();
-  }
+  void clear() { GlobalNumbers.clear(); }
 };
 
 class BBComparator {
 public:
   BBComparator(GlobalNumberState *GN, const DataLayout &DL)
-    : GlobalNumbers(GN)
-    , DL(DL) {}
+      : GlobalNumbers(GN), DL(DL) {}
 
   /// Test whether the two basic blocks have equivalent behaviour.
   int compare(const BasicBlock *BBL, const BasicBlock *BBR) const;
@@ -100,4 +95,4 @@ private:
 
 } // namespace llvm
 
-#endif //LLVMTRANSFORM_BBCOMPARING_H
+#endif // LLVMTRANSFORM_BBCOMPARING_H

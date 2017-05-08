@@ -23,13 +23,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "CompareBB.h"
-#include "Utilities.h"
 #include "FunctionCost.h"
+#include "Utilities.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-
 
 #include <deque>
 
@@ -51,14 +50,13 @@ static cl::opt<bool>
 
 static cl::opt<std::string> MergeSpecialFunction(
     "mergebb-function", cl::Hidden,
-    cl::desc(
-        "Merge group of identical BBs,"
-          "if at least one BB from this set has specified parent"));
-
-static cl::opt<std::string> MergeSpecialBB(
-    "mergebb-bb", cl::Hidden,
     cl::desc("Merge group of identical BBs,"
-               "if at least one BB name equals to specified"));
+             "if at least one BB from this set has specified parent"));
+
+static cl::opt<std::string>
+    MergeSpecialBB("mergebb-bb", cl::Hidden,
+                   cl::desc("Merge group of identical BBs,"
+                            "if at least one BB name equals to specified"));
 
 namespace {
 
@@ -91,8 +89,7 @@ private:
 } // end anonymous namespace
 
 char MergeBB::ID = 0;
-static RegisterPass<MergeBB> X("mergebb", "Merge basic blocks", false,
-                                   false);
+static RegisterPass<MergeBB> X("mergebb", "Merge basic blocks", false, false);
 
 void MergeBB::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfoWrapperPass>();
@@ -125,7 +122,7 @@ bool MergeBB::runOnModule(Module &M) {
 
   using VectorOfBBs = SmallVector<BasicBlock *, 16>;
   auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(
-    BBNodeCmp(&GlobalNumbers, M.getDataLayout()));
+      BBNodeCmp(&GlobalNumbers, M.getDataLayout()));
 
   // merge hashed values into map
   for (const auto &Node : HashedBBs) {
@@ -172,7 +169,6 @@ bool MergeBB::runOnModule(Module &M) {
 
   return Changed;
 }
-
 
 /// \return end iterator of the merged part of \p BB
 static inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
@@ -644,8 +640,8 @@ BBInfo &BBInfo::operator=(const BBInfo &Other) {
 }
 
 /// \return Values, that were created outside of the merged \p BB
-static SmallVector<Value *, 8> getInput(BasicBlock *BB,
-                                        const InstructionLocation &SpecialInsts) {
+static SmallVector<Value *, 8>
+getInput(BasicBlock *BB, const InstructionLocation &SpecialInsts) {
   // Values, created by merged BB or inserted into Result as Input
   DenseSet<const Value *> Values;
   SmallVector<Value *, 8> Result;
@@ -862,7 +858,6 @@ static Function *createFuncFromBB(const BBInfo &Info) {
   return F;
 }
 
-
 /// \param Info - Basic block, which is going to be replaced with function call
 /// to \p F
 static void replaceBBWithCall(BBInfo &Info, Function *F) {
@@ -892,8 +887,7 @@ static void replaceBBWithCall(BBInfo &Info, Function *F) {
 
   // 0) Prepare auxiliary utils
 
-  auto NewBB = BasicBlock::Create(BB->getContext(), "",
-                                  BB->getParent(), BB);
+  auto NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), BB);
   IRBuilder<> Builder(NewBB);
 
   auto GetValueForArgs = [&Builder](Value *V, Type *T) {
@@ -920,7 +914,7 @@ static void replaceBBWithCall(BBInfo &Info, Function *F) {
   };
 
   // 1) Move all pre-function Insts (Phi-nodes)
-  for (; BB->begin() != ItBeg; ) {
+  for (; BB->begin() != ItBeg;) {
     MoveInst(&*BB->begin());
   }
 
@@ -1050,9 +1044,9 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
   return i;
 }
 
-Function *cloneFunction(Function *F, BasicBlock *& BBOut) {
+Function *cloneFunction(Function *F, BasicBlock *&BBOut) {
   ValueToValueMapTy Tmp;
-  Function *Ret = CloneFunction(F,Tmp);
+  Function *Ret = CloneFunction(F, Tmp);
   Value *V = Tmp[BBOut];
   BBOut = cast<BasicBlock>(V);
   return Ret;
@@ -1062,7 +1056,8 @@ Function *cloneFunction(Function *F, BasicBlock *& BBOut) {
 /// \param F ~ Function to be called
 /// \param OtherInfo ~ Info, going to be cloned and used for factoring out
 /// \param BB ~ Basic block that is going to be factored out
-static void replaceBBInOtherFunction(Function *F, const BBInfo &OtherInfo, BasicBlock* BB) {
+static void replaceBBInOtherFunction(Function *F, const BBInfo &OtherInfo,
+                                     BasicBlock *BB) {
   BBInfo M2BBInfo = OtherInfo;
   M2BBInfo.setBB(BB);
   replaceBBWithCall(M2BBInfo, F);
@@ -1070,30 +1065,35 @@ static void replaceBBInOtherFunction(Function *F, const BBInfo &OtherInfo, Basic
 
 // \p F is our merged function, \p MBBInfo is going to make a call to it.
 // Procedure replace basic block in function anyway
-static Function *addReplacedFunction(FunctionCost &FC, Function *F, ArrayRef<BBInfo> MBBInfos) {
+static Function *addReplacedFunction(FunctionCost &FC, Function *F,
+                                     ArrayRef<BBInfo> MBBInfos) {
   const BBInfo &MBBInfo = MBBInfos.front();
   BasicBlock *ClonedBB = MBBInfo.getBB();
   // M2 stands for other module, that is in Function Cost
-  Function *CommonFunction = FC.cloneFunctionToInnerModule(*MBBInfo.getBB()->getParent(), ClonedBB);
+  Function *CommonFunction =
+      FC.cloneFunctionToInnerModule(*MBBInfo.getBB()->getParent(), ClonedBB);
   assert(ClonedBB != MBBInfo.getBB() && "Basic block must have been replaced");
-  assert(ClonedBB->getModule() != MBBInfo.getBB()->getModule() && "Basic block must have different modules");
-  Function *NewCommonFunction = FC.cloneInnerFunction(*CommonFunction,
-                   ClonedBB, std::string(CommonFunction->getName()) + ".new");
+  assert(ClonedBB->getModule() != MBBInfo.getBB()->getModule() &&
+         "Basic block must have different modules");
+  Function *NewCommonFunction =
+      FC.cloneInnerFunction(*CommonFunction, ClonedBB,
+                            std::string(CommonFunction->getName()) + ".new");
 
   replaceBBInOtherFunction(F, MBBInfo, ClonedBB);
 
   for (size_t i = 1, ei = MBBInfos.size(); i < ei; ++i) {
     const BBInfo &I = MBBInfos[i];
-    BasicBlock *BB = getMappedBBofIdenticalFunctions(I.getBB(), NewCommonFunction);
+    BasicBlock *BB =
+        getMappedBBofIdenticalFunctions(I.getBB(), NewCommonFunction);
     replaceBBInOtherFunction(F, MBBInfo, BB);
   }
 
   return NewCommonFunction;
 }
 
-
 static bool shouldReplace(bool FuncCreated, Function *F,
-                          const SmallVector<BBInfo, 8>& BBInfos, FunctionCost &Cost) {
+                          const SmallVector<BBInfo, 8> &BBInfos,
+                          FunctionCost &Cost) {
   SmallVector<Function *, 16> Funcs;
 
   if (FuncCreated)
@@ -1105,15 +1105,15 @@ static bool shouldReplace(bool FuncCreated, Function *F,
     // We are going to solve a case, when identical basic blocks
     // reside in the same function. In this case we need to replace all
     // these BBs and insert our function into comparing list just once
-    ArrayRef<BBInfo> InSameFunction = ArrayRef<BBInfo>(It, EIt).take_while(
-      [It](const BBInfo &I) -> bool
-      { return I.getBB()->getParent() == It->getBB()->getParent();});
+    ArrayRef<BBInfo> InSameFunction =
+        ArrayRef<BBInfo>(It, EIt).take_while([It](const BBInfo &I) -> bool {
+          return I.getBB()->getParent() == It->getBB()->getParent();
+        });
 
     Function *M2MergedF = addReplacedFunction(Cost, M2F, InSameFunction);
     Funcs.push_back(It->getBB()->getParent());
     Funcs.push_back(M2MergedF);
     It += InSameFunction.size();
-
   }
 
   auto ExpResult = Cost.getFunctionSizes(Funcs);
@@ -1125,12 +1125,12 @@ static bool shouldReplace(bool FuncCreated, Function *F,
   auto &Results = *ExpResult;
 
   int SizeProfit = FuncCreated ? -Results.front() : 0;
-  for (size_t i = static_cast<size_t>(FuncCreated); i < Results.size(); i += 2) {
-    SizeProfit += Results[i] - Results[i+1];
+  for (size_t i = static_cast<size_t>(FuncCreated); i < Results.size();
+       i += 2) {
+    SizeProfit += Results[i] - Results[i + 1];
   }
 
   return SizeProfit > 0;
-
 }
 
 /// Common steps of replacing equal basic blocks

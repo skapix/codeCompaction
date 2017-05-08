@@ -23,24 +23,29 @@ using namespace llvm;
 
 #define DEBUG_TYPE "compareBB"
 
-
 int BBComparator::cmpNumbers(uint64_t L, uint64_t R) const {
-  if (L < R) return -1;
-  if (L > R) return 1;
+  if (L < R)
+    return -1;
+  if (L > R)
+    return 1;
   return 0;
 }
 
 int BBComparator::cmpOrderings(AtomicOrdering L, AtomicOrdering R) const {
-  if ((int)L < (int)R) return -1;
-  if ((int)L > (int)R) return 1;
+  if ((int)L < (int)R)
+    return -1;
+  if ((int)L > (int)R)
+    return 1;
   return 0;
 }
 
 int BBComparator::cmpAPInts(const APInt &L, const APInt &R) const {
   if (int Res = cmpNumbers(L.getBitWidth(), R.getBitWidth()))
     return Res;
-  if (L.ugt(R)) return 1;
-  if (R.ugt(L)) return -1;
+  if (L.ugt(R))
+    return 1;
+  if (R.ugt(L))
+    return -1;
   return 0;
 }
 
@@ -73,15 +78,14 @@ int BBComparator::cmpMem(StringRef L, StringRef R) const {
   return L.compare(R);
 }
 
-int BBComparator::cmpAttrs(const AttributeList L,
-                           const AttributeList R) const {
+int BBComparator::cmpAttrs(const AttributeList L, const AttributeList R) const {
 
   if (int Res = cmpNumbers(L.getNumSlots(), R.getNumSlots()))
     return Res;
 
   for (unsigned i = 0, e = L.getNumSlots(); i != e; ++i) {
     AttributeList::iterator LI = L.begin(i), LE = L.end(i), RI = R.begin(i),
-      RE = R.end(i);
+                            RE = R.end(i);
     for (; LI != LE && RI != RE; ++LI, ++RI) {
       Attribute LA = *LI;
       Attribute RA = *RI;
@@ -98,8 +102,7 @@ int BBComparator::cmpAttrs(const AttributeList L,
   return 0;
 }
 
-int BBComparator::cmpRangeMetadata(const MDNode *L,
-                                   const MDNode *R) const {
+int BBComparator::cmpRangeMetadata(const MDNode *L, const MDNode *R) const {
   if (L == R)
     return 0;
   if (!L)
@@ -134,7 +137,7 @@ int BBComparator::cmpOperandBundlesSchema(const Instruction *L,
   assert(LCS.isCall() == RCS.isCall() && "Can't compare otherwise!");
 
   if (int Res =
-    cmpNumbers(LCS.getNumOperandBundles(), RCS.getNumOperandBundles()))
+          cmpNumbers(LCS.getNumOperandBundles(), RCS.getNumOperandBundles()))
     return Res;
 
   for (unsigned i = 0, e = LCS.getNumOperandBundles(); i != e; ++i) {
@@ -156,8 +159,7 @@ int BBComparator::cmpOperandBundlesSchema(const Instruction *L,
 /// type.
 /// 2. Compare constant contents.
 /// For more details see declaration comments.
-int BBComparator::cmpConstants(const Constant *L,
-                               const Constant *R) const {
+int BBComparator::cmpConstants(const Constant *L, const Constant *R) const {
 
   Type *TyL = L->getType();
   Type *TyR = R->getType();
@@ -224,8 +226,8 @@ int BBComparator::cmpConstants(const Constant *L,
   if (!L->isNullValue() && R->isNullValue())
     return -1;
 
-  auto GlobalValueL = const_cast<GlobalValue*>(dyn_cast<GlobalValue>(L));
-  auto GlobalValueR = const_cast<GlobalValue*>(dyn_cast<GlobalValue>(R));
+  auto GlobalValueL = const_cast<GlobalValue *>(dyn_cast<GlobalValue>(L));
+  auto GlobalValueR = const_cast<GlobalValue *>(dyn_cast<GlobalValue>(R));
   if (GlobalValueL && GlobalValueR) {
     return cmpGlobalValues(GlobalValueL, GlobalValueR);
   }
@@ -244,109 +246,109 @@ int BBComparator::cmpConstants(const Constant *L,
   }
 
   switch (L->getValueID()) {
-    case Value::UndefValueVal:
-    case Value::ConstantTokenNoneVal:
-      return TypesRes;
-    case Value::ConstantIntVal: {
-      const APInt &LInt = cast<ConstantInt>(L)->getValue();
-      const APInt &RInt = cast<ConstantInt>(R)->getValue();
-      return cmpAPInts(LInt, RInt);
-    }
-    case Value::ConstantFPVal: {
-      const APFloat &LAPF = cast<ConstantFP>(L)->getValueAPF();
-      const APFloat &RAPF = cast<ConstantFP>(R)->getValueAPF();
-      return cmpAPFloats(LAPF, RAPF);
-    }
-    case Value::ConstantArrayVal: {
-      const ConstantArray *LA = cast<ConstantArray>(L);
-      const ConstantArray *RA = cast<ConstantArray>(R);
-      uint64_t NumElementsL = cast<ArrayType>(TyL)->getNumElements();
-      uint64_t NumElementsR = cast<ArrayType>(TyR)->getNumElements();
-      if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+  case Value::UndefValueVal:
+  case Value::ConstantTokenNoneVal:
+    return TypesRes;
+  case Value::ConstantIntVal: {
+    const APInt &LInt = cast<ConstantInt>(L)->getValue();
+    const APInt &RInt = cast<ConstantInt>(R)->getValue();
+    return cmpAPInts(LInt, RInt);
+  }
+  case Value::ConstantFPVal: {
+    const APFloat &LAPF = cast<ConstantFP>(L)->getValueAPF();
+    const APFloat &RAPF = cast<ConstantFP>(R)->getValueAPF();
+    return cmpAPFloats(LAPF, RAPF);
+  }
+  case Value::ConstantArrayVal: {
+    const ConstantArray *LA = cast<ConstantArray>(L);
+    const ConstantArray *RA = cast<ConstantArray>(R);
+    uint64_t NumElementsL = cast<ArrayType>(TyL)->getNumElements();
+    uint64_t NumElementsR = cast<ArrayType>(TyR)->getNumElements();
+    if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+      return Res;
+    for (uint64_t i = 0; i < NumElementsL; ++i) {
+      if (int Res = cmpConstants(cast<Constant>(LA->getOperand(i)),
+                                 cast<Constant>(RA->getOperand(i))))
         return Res;
-      for (uint64_t i = 0; i < NumElementsL; ++i) {
-        if (int Res = cmpConstants(cast<Constant>(LA->getOperand(i)),
-                                   cast<Constant>(RA->getOperand(i))))
-          return Res;
-      }
-      return 0;
     }
-    case Value::ConstantStructVal: {
-      const ConstantStruct *LS = cast<ConstantStruct>(L);
-      const ConstantStruct *RS = cast<ConstantStruct>(R);
-      unsigned NumElementsL = cast<StructType>(TyL)->getNumElements();
-      unsigned NumElementsR = cast<StructType>(TyR)->getNumElements();
-      if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+    return 0;
+  }
+  case Value::ConstantStructVal: {
+    const ConstantStruct *LS = cast<ConstantStruct>(L);
+    const ConstantStruct *RS = cast<ConstantStruct>(R);
+    unsigned NumElementsL = cast<StructType>(TyL)->getNumElements();
+    unsigned NumElementsR = cast<StructType>(TyR)->getNumElements();
+    if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+      return Res;
+    for (unsigned i = 0; i != NumElementsL; ++i) {
+      if (int Res = cmpConstants(cast<Constant>(LS->getOperand(i)),
+                                 cast<Constant>(RS->getOperand(i))))
         return Res;
-      for (unsigned i = 0; i != NumElementsL; ++i) {
-        if (int Res = cmpConstants(cast<Constant>(LS->getOperand(i)),
-                                   cast<Constant>(RS->getOperand(i))))
-          return Res;
-      }
-      return 0;
     }
-    case Value::ConstantVectorVal: {
-      const ConstantVector *LV = cast<ConstantVector>(L);
-      const ConstantVector *RV = cast<ConstantVector>(R);
-      unsigned NumElementsL = cast<VectorType>(TyL)->getNumElements();
-      unsigned NumElementsR = cast<VectorType>(TyR)->getNumElements();
-      if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+    return 0;
+  }
+  case Value::ConstantVectorVal: {
+    const ConstantVector *LV = cast<ConstantVector>(L);
+    const ConstantVector *RV = cast<ConstantVector>(R);
+    unsigned NumElementsL = cast<VectorType>(TyL)->getNumElements();
+    unsigned NumElementsR = cast<VectorType>(TyR)->getNumElements();
+    if (int Res = cmpNumbers(NumElementsL, NumElementsR))
+      return Res;
+    for (uint64_t i = 0; i < NumElementsL; ++i) {
+      if (int Res = cmpConstants(cast<Constant>(LV->getOperand(i)),
+                                 cast<Constant>(RV->getOperand(i))))
         return Res;
-      for (uint64_t i = 0; i < NumElementsL; ++i) {
-        if (int Res = cmpConstants(cast<Constant>(LV->getOperand(i)),
-                                   cast<Constant>(RV->getOperand(i))))
-          return Res;
-      }
-      return 0;
     }
-    case Value::ConstantExprVal: {
-      const ConstantExpr *LE = cast<ConstantExpr>(L);
-      const ConstantExpr *RE = cast<ConstantExpr>(R);
-      unsigned NumOperandsL = LE->getNumOperands();
-      unsigned NumOperandsR = RE->getNumOperands();
-      if (int Res = cmpNumbers(NumOperandsL, NumOperandsR))
+    return 0;
+  }
+  case Value::ConstantExprVal: {
+    const ConstantExpr *LE = cast<ConstantExpr>(L);
+    const ConstantExpr *RE = cast<ConstantExpr>(R);
+    unsigned NumOperandsL = LE->getNumOperands();
+    unsigned NumOperandsR = RE->getNumOperands();
+    if (int Res = cmpNumbers(NumOperandsL, NumOperandsR))
+      return Res;
+    for (unsigned i = 0; i < NumOperandsL; ++i) {
+      if (int Res = cmpConstants(cast<Constant>(LE->getOperand(i)),
+                                 cast<Constant>(RE->getOperand(i))))
         return Res;
-      for (unsigned i = 0; i < NumOperandsL; ++i) {
-        if (int Res = cmpConstants(cast<Constant>(LE->getOperand(i)),
-                                   cast<Constant>(RE->getOperand(i))))
-          return Res;
-      }
-      return 0;
     }
-    case Value::BlockAddressVal: {
-      const BlockAddress *LBA = cast<BlockAddress>(L);
-      const BlockAddress *RBA = cast<BlockAddress>(R);
-      if (int Res = cmpValues(LBA->getFunction(), RBA->getFunction()))
-        return Res;
-      if (LBA->getFunction() == RBA->getFunction()) {
-        // They are BBs in the same function. Order by which comes first in the
-        // BB order of the function. This order is deterministic.
-        Function* F = LBA->getFunction();
-        BasicBlock *LBB = LBA->getBasicBlock();
-        BasicBlock *RBB = RBA->getBasicBlock();
-        if (LBB == RBB)
-          return 0;
-        for(BasicBlock &BB : F->getBasicBlockList()) {
-          if (&BB == LBB) {
-            assert(&BB != RBB);
-            return -1;
-          }
-          if (&BB == RBB)
-            return 1;
+    return 0;
+  }
+  case Value::BlockAddressVal: {
+    const BlockAddress *LBA = cast<BlockAddress>(L);
+    const BlockAddress *RBA = cast<BlockAddress>(R);
+    if (int Res = cmpValues(LBA->getFunction(), RBA->getFunction()))
+      return Res;
+    if (LBA->getFunction() == RBA->getFunction()) {
+      // They are BBs in the same function. Order by which comes first in the
+      // BB order of the function. This order is deterministic.
+      Function *F = LBA->getFunction();
+      BasicBlock *LBB = LBA->getBasicBlock();
+      BasicBlock *RBB = RBA->getBasicBlock();
+      if (LBB == RBB)
+        return 0;
+      for (BasicBlock &BB : F->getBasicBlockList()) {
+        if (&BB == LBB) {
+          assert(&BB != RBB);
+          return -1;
         }
-        llvm_unreachable("Basic Block Address does not point to a basic block in "
-                           "its function.");
-        return -1;
-      } else {
-        // cmpValues will tell us if these are equivalent BasicBlocks, in the
-        // context of their respective functions.
-        return cmpValues(LBA->getBasicBlock(), RBA->getBasicBlock());
+        if (&BB == RBB)
+          return 1;
       }
-    }
-    default: // Unknown constant, abort.
-      DEBUG(dbgs() << "Looking at valueID " << L->getValueID() << "\n");
-      llvm_unreachable("Constant ValueID not recognized.");
+      llvm_unreachable("Basic Block Address does not point to a basic block in "
+                       "its function.");
       return -1;
+    } else {
+      // cmpValues will tell us if these are equivalent BasicBlocks, in the
+      // context of their respective functions.
+      return cmpValues(LBA->getBasicBlock(), RBA->getBasicBlock());
+    }
+  }
+  default: // Unknown constant, abort.
+    DEBUG(dbgs() << "Looking at valueID " << L->getValueID() << "\n");
+    llvm_unreachable("Constant ValueID not recognized.");
+    return -1;
   }
 }
 
@@ -373,78 +375,78 @@ int BBComparator::cmpTypes(Type *TyL, Type *TyR) const {
     return Res;
 
   switch (TyL->getTypeID()) {
-    default:
-      llvm_unreachable("Unknown type!");
-      // Fall through in Release mode.
-      // LLVM_FALLTHROUGH;
-    case Type::IntegerTyID:
-      return cmpNumbers(cast<IntegerType>(TyL)->getBitWidth(),
-                        cast<IntegerType>(TyR)->getBitWidth());
-    case Type::VectorTyID: {
-      VectorType *VTyL = cast<VectorType>(TyL), *VTyR = cast<VectorType>(TyR);
-      if (int Res = cmpNumbers(VTyL->getNumElements(), VTyR->getNumElements()))
+  default:
+    llvm_unreachable("Unknown type!");
+  // Fall through in Release mode.
+  // LLVM_FALLTHROUGH;
+  case Type::IntegerTyID:
+    return cmpNumbers(cast<IntegerType>(TyL)->getBitWidth(),
+                      cast<IntegerType>(TyR)->getBitWidth());
+  case Type::VectorTyID: {
+    VectorType *VTyL = cast<VectorType>(TyL), *VTyR = cast<VectorType>(TyR);
+    if (int Res = cmpNumbers(VTyL->getNumElements(), VTyR->getNumElements()))
+      return Res;
+    return cmpTypes(VTyL->getElementType(), VTyR->getElementType());
+  }
+  // TyL == TyR would have returned true earlier, because types are uniqued.
+  case Type::VoidTyID:
+  case Type::FloatTyID:
+  case Type::DoubleTyID:
+  case Type::X86_FP80TyID:
+  case Type::FP128TyID:
+  case Type::PPC_FP128TyID:
+  case Type::LabelTyID:
+  case Type::MetadataTyID:
+  case Type::TokenTyID:
+    return 0;
+
+  case Type::PointerTyID: {
+    assert(PTyL && PTyR && "Both types must be pointers here.");
+    return cmpNumbers(PTyL->getAddressSpace(), PTyR->getAddressSpace());
+  }
+
+  case Type::StructTyID: {
+    StructType *STyL = cast<StructType>(TyL);
+    StructType *STyR = cast<StructType>(TyR);
+    if (STyL->getNumElements() != STyR->getNumElements())
+      return cmpNumbers(STyL->getNumElements(), STyR->getNumElements());
+
+    if (STyL->isPacked() != STyR->isPacked())
+      return cmpNumbers(STyL->isPacked(), STyR->isPacked());
+
+    for (unsigned i = 0, e = STyL->getNumElements(); i != e; ++i) {
+      if (int Res = cmpTypes(STyL->getElementType(i), STyR->getElementType(i)))
         return Res;
-      return cmpTypes(VTyL->getElementType(), VTyR->getElementType());
     }
-      // TyL == TyR would have returned true earlier, because types are uniqued.
-    case Type::VoidTyID:
-    case Type::FloatTyID:
-    case Type::DoubleTyID:
-    case Type::X86_FP80TyID:
-    case Type::FP128TyID:
-    case Type::PPC_FP128TyID:
-    case Type::LabelTyID:
-    case Type::MetadataTyID:
-    case Type::TokenTyID:
-      return 0;
+    return 0;
+  }
 
-    case Type::PointerTyID: {
-      assert(PTyL && PTyR && "Both types must be pointers here.");
-      return cmpNumbers(PTyL->getAddressSpace(), PTyR->getAddressSpace());
-    }
+  case Type::FunctionTyID: {
+    FunctionType *FTyL = cast<FunctionType>(TyL);
+    FunctionType *FTyR = cast<FunctionType>(TyR);
+    if (FTyL->getNumParams() != FTyR->getNumParams())
+      return cmpNumbers(FTyL->getNumParams(), FTyR->getNumParams());
 
-    case Type::StructTyID: {
-      StructType *STyL = cast<StructType>(TyL);
-      StructType *STyR = cast<StructType>(TyR);
-      if (STyL->getNumElements() != STyR->getNumElements())
-        return cmpNumbers(STyL->getNumElements(), STyR->getNumElements());
+    if (FTyL->isVarArg() != FTyR->isVarArg())
+      return cmpNumbers(FTyL->isVarArg(), FTyR->isVarArg());
 
-      if (STyL->isPacked() != STyR->isPacked())
-        return cmpNumbers(STyL->isPacked(), STyR->isPacked());
+    if (int Res = cmpTypes(FTyL->getReturnType(), FTyR->getReturnType()))
+      return Res;
 
-      for (unsigned i = 0, e = STyL->getNumElements(); i != e; ++i) {
-        if (int Res = cmpTypes(STyL->getElementType(i), STyR->getElementType(i)))
-          return Res;
-      }
-      return 0;
-    }
-
-    case Type::FunctionTyID: {
-      FunctionType *FTyL = cast<FunctionType>(TyL);
-      FunctionType *FTyR = cast<FunctionType>(TyR);
-      if (FTyL->getNumParams() != FTyR->getNumParams())
-        return cmpNumbers(FTyL->getNumParams(), FTyR->getNumParams());
-
-      if (FTyL->isVarArg() != FTyR->isVarArg())
-        return cmpNumbers(FTyL->isVarArg(), FTyR->isVarArg());
-
-      if (int Res = cmpTypes(FTyL->getReturnType(), FTyR->getReturnType()))
+    for (unsigned i = 0, e = FTyL->getNumParams(); i != e; ++i) {
+      if (int Res = cmpTypes(FTyL->getParamType(i), FTyR->getParamType(i)))
         return Res;
-
-      for (unsigned i = 0, e = FTyL->getNumParams(); i != e; ++i) {
-        if (int Res = cmpTypes(FTyL->getParamType(i), FTyR->getParamType(i)))
-          return Res;
-      }
-      return 0;
     }
+    return 0;
+  }
 
-    case Type::ArrayTyID: {
-      ArrayType *ATyL = cast<ArrayType>(TyL);
-      ArrayType *ATyR = cast<ArrayType>(TyR);
-      if (ATyL->getNumElements() != ATyR->getNumElements())
-        return cmpNumbers(ATyL->getNumElements(), ATyR->getNumElements());
-      return cmpTypes(ATyL->getElementType(), ATyR->getElementType());
-    }
+  case Type::ArrayTyID: {
+    ArrayType *ATyL = cast<ArrayType>(TyL);
+    ArrayType *ATyR = cast<ArrayType>(TyR);
+    if (ATyL->getNumElements() != ATyR->getNumElements())
+      return cmpNumbers(ATyL->getNumElements(), ATyR->getNumElements());
+    return cmpTypes(ATyL->getElementType(), ATyR->getElementType());
+  }
   }
 }
 
@@ -475,7 +477,7 @@ int BBComparator::cmpOperations(const Instruction *L,
   // if all operands are the same type
   for (unsigned i = 0, e = L->getNumOperands(); i != e; ++i) {
     if (int Res =
-      cmpTypes(L->getOperand(i)->getType(), R->getOperand(i)->getType()))
+            cmpTypes(L->getOperand(i)->getType(), R->getOperand(i)->getType()))
       return Res;
   }
 
@@ -490,26 +492,27 @@ int BBComparator::cmpOperations(const Instruction *L,
     if (int Res = cmpNumbers(LI->isVolatile(), cast<LoadInst>(R)->isVolatile()))
       return Res;
     if (int Res =
-      cmpNumbers(LI->getAlignment(), cast<LoadInst>(R)->getAlignment()))
+            cmpNumbers(LI->getAlignment(), cast<LoadInst>(R)->getAlignment()))
       return Res;
     if (int Res =
-      cmpOrderings(LI->getOrdering(), cast<LoadInst>(R)->getOrdering()))
+            cmpOrderings(LI->getOrdering(), cast<LoadInst>(R)->getOrdering()))
       return Res;
     if (int Res =
-      cmpNumbers(LI->getSynchScope(), cast<LoadInst>(R)->getSynchScope()))
+            cmpNumbers(LI->getSynchScope(), cast<LoadInst>(R)->getSynchScope()))
       return Res;
-    return cmpRangeMetadata(LI->getMetadata(LLVMContext::MD_range),
-                            cast<LoadInst>(R)->getMetadata(LLVMContext::MD_range));
+    return cmpRangeMetadata(
+        LI->getMetadata(LLVMContext::MD_range),
+        cast<LoadInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const StoreInst *SI = dyn_cast<StoreInst>(L)) {
     if (int Res =
-      cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
+            cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
       return Res;
     if (int Res =
-      cmpNumbers(SI->getAlignment(), cast<StoreInst>(R)->getAlignment()))
+            cmpNumbers(SI->getAlignment(), cast<StoreInst>(R)->getAlignment()))
       return Res;
     if (int Res =
-      cmpOrderings(SI->getOrdering(), cast<StoreInst>(R)->getOrdering()))
+            cmpOrderings(SI->getOrdering(), cast<StoreInst>(R)->getOrdering()))
       return Res;
     return cmpNumbers(SI->getSynchScope(), cast<StoreInst>(R)->getSynchScope());
   }
@@ -520,26 +523,26 @@ int BBComparator::cmpOperations(const Instruction *L,
                              cast<CallInst>(R)->getCallingConv()))
       return Res;
     if (int Res =
-      cmpAttrs(CI->getAttributes(), cast<CallInst>(R)->getAttributes()))
+            cmpAttrs(CI->getAttributes(), cast<CallInst>(R)->getAttributes()))
       return Res;
     if (int Res = cmpOperandBundlesSchema(CI, R))
       return Res;
     return cmpRangeMetadata(
-      CI->getMetadata(LLVMContext::MD_range),
-      cast<CallInst>(R)->getMetadata(LLVMContext::MD_range));
+        CI->getMetadata(LLVMContext::MD_range),
+        cast<CallInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const InvokeInst *II = dyn_cast<InvokeInst>(L)) {
     if (int Res = cmpNumbers(II->getCallingConv(),
                              cast<InvokeInst>(R)->getCallingConv()))
       return Res;
     if (int Res =
-      cmpAttrs(II->getAttributes(), cast<InvokeInst>(R)->getAttributes()))
+            cmpAttrs(II->getAttributes(), cast<InvokeInst>(R)->getAttributes()))
       return Res;
     if (int Res = cmpOperandBundlesSchema(II, R))
       return Res;
     return cmpRangeMetadata(
-      II->getMetadata(LLVMContext::MD_range),
-      cast<InvokeInst>(R)->getMetadata(LLVMContext::MD_range));
+        II->getMetadata(LLVMContext::MD_range),
+        cast<InvokeInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const InsertValueInst *IVI = dyn_cast<InsertValueInst>(L)) {
     ArrayRef<unsigned> LIndices = IVI->getIndices();
@@ -564,7 +567,7 @@ int BBComparator::cmpOperations(const Instruction *L,
   }
   if (const FenceInst *FI = dyn_cast<FenceInst>(L)) {
     if (int Res =
-      cmpOrderings(FI->getOrdering(), cast<FenceInst>(R)->getOrdering()))
+            cmpOrderings(FI->getOrdering(), cast<FenceInst>(R)->getOrdering()))
       return Res;
     return cmpNumbers(FI->getSynchScope(), cast<FenceInst>(R)->getSynchScope());
   }
@@ -572,16 +575,16 @@ int BBComparator::cmpOperations(const Instruction *L,
     if (int Res = cmpNumbers(CXI->isVolatile(),
                              cast<AtomicCmpXchgInst>(R)->isVolatile()))
       return Res;
-    if (int Res = cmpNumbers(CXI->isWeak(),
-                             cast<AtomicCmpXchgInst>(R)->isWeak()))
+    if (int Res =
+            cmpNumbers(CXI->isWeak(), cast<AtomicCmpXchgInst>(R)->isWeak()))
       return Res;
     if (int Res =
-      cmpOrderings(CXI->getSuccessOrdering(),
-                   cast<AtomicCmpXchgInst>(R)->getSuccessOrdering()))
+            cmpOrderings(CXI->getSuccessOrdering(),
+                         cast<AtomicCmpXchgInst>(R)->getSuccessOrdering()))
       return Res;
     if (int Res =
-      cmpOrderings(CXI->getFailureOrdering(),
-                   cast<AtomicCmpXchgInst>(R)->getFailureOrdering()))
+            cmpOrderings(CXI->getFailureOrdering(),
+                         cast<AtomicCmpXchgInst>(R)->getFailureOrdering()))
       return Res;
     return cmpNumbers(CXI->getSynchScope(),
                       cast<AtomicCmpXchgInst>(R)->getSynchScope());
@@ -606,7 +609,7 @@ int BBComparator::cmpOperations(const Instruction *L,
     // are also identical.
     for (unsigned i = 0, e = PNL->getNumIncomingValues(); i != e; ++i) {
       if (int Res =
-        cmpValues(PNL->getIncomingBlock(i), PNR->getIncomingBlock(i)))
+              cmpValues(PNL->getIncomingBlock(i), PNR->getIncomingBlock(i)))
         return Res;
     }
   }
@@ -631,8 +634,8 @@ int BBComparator::cmpGEPs(const GEPOperator *GEPL,
   if (GEPL->accumulateConstantOffset(DL, OffsetL) &&
       GEPR->accumulateConstantOffset(DL, OffsetR))
     return cmpAPInts(OffsetL, OffsetR);
-  if (int Res = cmpTypes(GEPL->getSourceElementType(),
-                         GEPR->getSourceElementType()))
+  if (int Res =
+          cmpTypes(GEPL->getSourceElementType(), GEPR->getSourceElementType()))
     return Res;
 
   if (int Res = cmpNumbers(GEPL->getNumOperands(), GEPR->getNumOperands()))
@@ -646,8 +649,7 @@ int BBComparator::cmpGEPs(const GEPOperator *GEPL,
   return 0;
 }
 
-int BBComparator::cmpInlineAsm(const InlineAsm *L,
-                               const InlineAsm *R) const {
+int BBComparator::cmpInlineAsm(const InlineAsm *L, const InlineAsm *R) const {
   // InlineAsm's are uniqued. If they are the same pointer, obviously they are
   // the same, otherwise compare the fields.
   if (L == R)
@@ -698,7 +700,7 @@ int BBComparator::cmpValues(const Value *L, const Value *R) const {
     return -1;
 
   auto LeftSN = sn_mapL.insert(std::make_pair(L, sn_mapL.size())),
-    RightSN = sn_mapR.insert(std::make_pair(R, sn_mapR.size()));
+       RightSN = sn_mapR.insert(std::make_pair(R, sn_mapR.size()));
 
   return cmpNumbers(LeftSN.first->second, RightSN.first->second);
 }
@@ -709,8 +711,7 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
   // minimum BB size equals to 1 and if so, this instruction is TermInst,
   // that is not checked
   if (BBL->size() == 1 || BBR->size() == 1)
-    return BBL->size() > BBR->size() ? 1 :
-           BBL->size() < BBR->size() ? -1 : 0;
+    return BBL->size() > BBR->size() ? 1 : BBL->size() < BBR->size() ? -1 : 0;
 
   assert(isa<TerminatorInst>(BBL->back()));
   assert(isa<TerminatorInst>(BBR->back()));
@@ -718,9 +719,9 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
   // We don't compare them in BBFactor because they are not part
   // of factored function
   BasicBlock::const_iterator InstL = BBL->begin(),
-    InstLE = std::prev(BBL->end());
+                             InstLE = std::prev(BBL->end());
   BasicBlock::const_iterator InstR = BBR->begin(),
-    InstRE = std::prev(BBR->end());
+                             InstRE = std::prev(BBR->end());
 
   while (isa<PHINode>(InstL))
     ++InstL;
@@ -741,7 +742,7 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
 
     if (GEPL && GEPR) {
       if (int Res =
-        cmpValues(GEPL->getPointerOperand(), GEPR->getPointerOperand()))
+              cmpValues(GEPL->getPointerOperand(), GEPR->getPointerOperand()))
         return Res;
       if (int Res = cmpGEPs(GEPL, GEPR))
         return Res;
@@ -764,7 +765,8 @@ int BBComparator::cmpBasicBlocks(const BasicBlock *BBL,
   return 0;
 }
 
-int BBComparator::cmpInstOperands(const Instruction *InstL, const Instruction *InstR) const {
+int BBComparator::cmpInstOperands(const Instruction *InstL,
+                                  const Instruction *InstR) const {
   assert(InstL->getNumOperands() == InstR->getNumOperands());
 
   int Res = 0;
@@ -787,7 +789,6 @@ int BBComparator::cmpInstOperands(const Instruction *InstL, const Instruction *I
     return 0;
 
   return Res;
-
 }
 
 namespace {
@@ -800,12 +801,11 @@ namespace {
 // buffer.
 class HashAccumulator64 {
   uint64_t Hash;
+
 public:
   // Initialize to random constant, so the state isn't zero.
   HashAccumulator64() { Hash = 0x6acaa36bef8325c5ULL; }
-  void add(uint64_t V) {
-    Hash = llvm::hashing::detail::hash_16_bytes(Hash, V);
-  }
+  void add(uint64_t V) { Hash = llvm::hashing::detail::hash_16_bytes(Hash, V); }
   // No finishing is required, because the entire hash value is used.
   uint64_t getHash() { return Hash; }
 };
@@ -821,40 +821,83 @@ public:
 // target of calls and the constants used in the function, which makes it useful
 // when possibly merging functions which are the same modulo constants and call
 // targets.
-BBComparator::BasicBlockHash BBComparator::basicBlockHash(const BasicBlock &BB) {
+BBComparator::BasicBlockHash
+BBComparator::basicBlockHash(const BasicBlock &BB) {
   HashAccumulator64 H;
-  auto IE =  std::prev(BB.end());
+  auto IE = std::prev(BB.end());
   auto I = BB.begin();
-  for (; isa<PHINode>(I); ++I);
+  for (; isa<PHINode>(I); ++I)
+    ;
 
-  for (;  I != IE; ++I)
+  for (; I != IE; ++I)
     H.add(I->getOpcode());
   return H.getHash();
+}
+
+/// Creates attributes, that we should check, comparing BB's functions
+AttrBuilder createUsedAttributes(LLVMContext &C) {
+
+  Attribute::AttrKind Attributes[] = {
+      Attribute::MinSize, Attribute::NoImplicitFloat, Attribute::OptimizeNone,
+      Attribute::OptimizeForSize};
+
+  StringRef StringAttributes[] = {"target-cpu",
+                                  "target-features",
+                                  "correctly-rounded-divide-sqrt-fp-math",
+                                  "less-precise-fpmad",
+                                  "no-infs-fp-math",
+                                  "no-nans-fp-math",
+                                  "no-signed-zeros-fp-math",
+                                  "no-trapping-math"};
+
+  AttrBuilder Result;
+
+  for (auto Attr : Attributes) {
+    Result.addAttribute(Attribute::get(C, Attr));
+  }
+  for (auto Attr : StringAttributes) {
+    Result.addAttribute(Attribute::get(C, Attr));
+  }
+
+  return Result;
+}
+
+static int cmpFnAttrs(const AttributeSet UsedSet, const AttributeSet LF,
+                      const AttributeSet RF) {
+  for (auto Attr : UsedSet) {
+    Attribute L, R;
+    if (Attr.isEnumAttribute()) {
+      L = LF.getAttribute(Attr.getKindAsEnum());
+      R = RF.getAttribute(Attr.getKindAsEnum());
+    } else if (Attr.isStringAttribute()) {
+      L = LF.getAttribute(Attr.getKindAsString());
+      R = RF.getAttribute(Attr.getKindAsString());
+    } else
+      llvm_unreachable("Unknown attribute");
+    if (L < R)
+      return -1;
+    if (R < L)
+      return 1;
+  }
+  return 0;
 }
 
 int BBComparator::compare(const BasicBlock *BBL, const BasicBlock *BBR) const {
   sn_mapL.clear();
   sn_mapR.clear();
-  static const AttributeList unnecessaryAttributes = AttributeList().
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::ReadOnly).
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::WriteOnly).
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::JumpTable).
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::Naked).
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoReturn).
-    addAttribute(BBL->getContext(), AttributeList::FunctionIndex, Attribute::NoRecurse).
-    addAttribute(BBL->getContext(),AttributeList::FunctionIndex, Attribute::ReadNone);
 
-  static const AttrBuilder attrList(unnecessaryAttributes, AttributeList::FunctionIndex);
+  static const AttrBuilder UsedAttrs = createUsedAttributes(BBL->getContext());
 
+  static const AttributeSet FnUsefulAttrSet = AttributeSet::get(
+      BBL->getContext(), createUsedAttributes(BBL->getContext()));
 
-  auto AttributesLF =  BBL->getParent()->getAttributes().removeAttributes(
-    BBL->getContext(), AttributeList::FunctionIndex, attrList);
-  auto AttributesRF =  BBR->getParent()->getAttributes().removeAttributes(
-    BBR->getContext(), AttributeList::FunctionIndex, attrList);
-  if (int Res = cmpAttrs(AttributesLF, AttributesRF))
+  const auto LAttr = BBL->getParent()->getAttributes().getFnAttributes();
+  const auto RAttr = BBR->getParent()->getAttributes().getFnAttributes();
+  if (int Res = cmpFnAttrs(FnUsefulAttrSet, LAttr, RAttr))
     return Res;
 
-  if (int Res = cmpNumbers(BBL->getParent()->hasGC(), BBR->getParent()->hasGC()))
+  if (int Res =
+          cmpNumbers(BBL->getParent()->hasGC(), BBR->getParent()->hasGC()))
     return Res;
 
   if (BBL->getParent()->hasGC()) {
@@ -862,11 +905,13 @@ int BBComparator::compare(const BasicBlock *BBL, const BasicBlock *BBR) const {
       return Res;
   }
 
-  if (int Res = cmpNumbers(BBL->getParent()->hasSection(), BBR->getParent()->hasSection()))
+  if (int Res = cmpNumbers(BBL->getParent()->hasSection(),
+                           BBR->getParent()->hasSection()))
     return Res;
 
   if (BBL->getParent()->hasSection()) {
-    if (int Res = cmpMem(BBL->getParent()->getSection(), BBR->getParent()->getSection()))
+    if (int Res = cmpMem(BBL->getParent()->getSection(),
+                         BBR->getParent()->getSection()))
       return Res;
   }
 

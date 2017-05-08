@@ -8,21 +8,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "FunctionCost.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/TargetRegistry.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolSize.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/Host.h"
-#include "llvm/IR/CallSite.h"
-
-#include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 // TODO: it is also possible to map metadata. Will metadata mapping increase
 // accuracy of exact size?
@@ -35,10 +34,11 @@
 
 using namespace llvm;
 
-static Function *CreateFunction(const Function &F, Module *M, const StringRef NewName) {
+static Function *CreateFunction(const Function &F, Module *M,
+                                const StringRef NewName) {
   assert(M->getFunction(NewName) == nullptr && "Function already exists");
-  Function *NF = Function::Create(F.getFunctionType(),
-                                  F.getLinkage(), NewName, M);
+  Function *NF =
+      Function::Create(F.getFunctionType(), F.getLinkage(), NewName, M);
   // TODO: check function copies function attributes
   NF->copyAttributesFrom(&F);
   if (NF->getLinkage() == Function::LinkageTypes::PrivateLinkage ||
@@ -64,24 +64,20 @@ private:
 Value *ModuleMaterializer::materialize(Value *V) {
   if (auto GV = dyn_cast<GlobalVariable>(V)) {
     assert(M->getGlobalVariable(V->getName()) == nullptr);
-    GlobalVariable *NGV = new GlobalVariable(*M,
-                                             GV->getValueType(),
-                                             GV->isConstant(), GV->getLinkage(),
-                                             nullptr, GV->getName(),
-                                             nullptr, GV->getThreadLocalMode(),
-                                             GV->getType()->getAddressSpace());
+    GlobalVariable *NGV = new GlobalVariable(
+        *M, GV->getValueType(), GV->isConstant(), GV->getLinkage(), nullptr,
+        GV->getName(), nullptr, GV->getThreadLocalMode(),
+        GV->getType()->getAddressSpace());
     NGV->copyAttributesFrom(&*GV);
     if (NGV->getLinkage() == GlobalVariable::LinkageTypes::PrivateLinkage ||
-      NGV->getLinkage() == GlobalVariable::LinkageTypes::InternalLinkage)
+        NGV->getLinkage() == GlobalVariable::LinkageTypes::InternalLinkage)
       NGV->setLinkage(Function::ExternalLinkage);
     return NGV;
-  }
-  else if (auto F = dyn_cast<Function>(V)) {
+  } else if (auto F = dyn_cast<Function>(V)) {
     return CreateFunction(*F, M);
   }
   return nullptr;
 }
-
 
 // initializes all necessary info for calculating size
 static void initializeAdditionInfo() {
@@ -99,13 +95,13 @@ static void copyModuleInfo(const Module &From, Module &To) {
 }
 
 FunctionCost::FunctionCost(const Module &OtherM)
-  : M(make_unique<Module>("FunctionCost_auxiliary", OtherM.getContext())),
-    Materializer(make_unique<ModuleMaterializer>(*M)),
-    OS(OSBuf),
-    IsInitialized(false) {
+    : M(make_unique<Module>("FunctionCost_auxiliary", OtherM.getContext())),
+      Materializer(make_unique<ModuleMaterializer>(*M)), OS(OSBuf),
+      IsInitialized(false) {
 
-  std::string TripleName = OtherM.getTargetTriple().empty() ?
-                      sys::getDefaultTargetTriple() : OtherM.getTargetTriple();
+  std::string TripleName = OtherM.getTargetTriple().empty()
+                               ? sys::getDefaultTargetTriple()
+                               : OtherM.getTargetTriple();
 
   copyModuleInfo(OtherM, *M);
   M->setDataLayout(OtherM.getDataLayout());
@@ -132,8 +128,7 @@ FunctionCost::FunctionCost(const Module &OtherM)
     return;
   }
 
-
-  //TargetOptions Options = InitTargetOptionsFromCodeGenFlags();
+  // TargetOptions Options = InitTargetOptionsFromCodeGenFlags();
   TargetOptions Options;
 
   TM.reset(TheTarget->createTargetMachine(TripleName, CPUStr, FeaturesStr,
@@ -148,14 +143,12 @@ FunctionCost::FunctionCost(const Module &OtherM)
 
   PM.add(new TargetLibraryInfoWrapperPass(TLII));
 
-  if (TM->addPassesToEmitFile(PM, OS, TargetMachine::CGFT_ObjectFile))
-  {
+  if (TM->addPassesToEmitFile(PM, OS, TargetMachine::CGFT_ObjectFile)) {
     DEBUG(dbgs() << "Can't compile module\n");
     return;
   }
 
   IsInitialized = true;
-
 }
 
 static void deinitializeAdditionInfo() {
@@ -164,30 +157,29 @@ static void deinitializeAdditionInfo() {
 }
 
 static void getFunctionReplaces(Function &F, Function &NewF,
-                                             ValueToValueMapTy &Result) {
+                                ValueToValueMapTy &Result) {
   Result.insert({&F, &NewF});
   for (auto AF = F.arg_begin(), NAF = NewF.arg_begin(), EAF = F.arg_end();
-    AF != EAF; ++AF, ++NAF) {
+       AF != EAF; ++AF, ++NAF) {
     Result.insert({&*AF, &*NAF});
   }
 }
 
 static void resetFunctionReplaces(Function &F, ValueToValueMapTy &Result) {
   // don't erase mapping to Function itself
-  for (auto AF = F.arg_begin(), EAF = F.arg_end();
-       AF != EAF; ++AF) {
+  for (auto AF = F.arg_begin(), EAF = F.arg_end(); AF != EAF; ++AF) {
     bool Erased = Result.erase(AF);
     (void)Erased;
     assert(Erased && "Inconsistency");
   }
 }
 
-
-Function *FunctionCost::cloneFunctionToInnerModule(Function &F, BasicBlock *&BBInterest) {
+Function *FunctionCost::cloneFunctionToInnerModule(Function &F,
+                                                   BasicBlock *&BBInterest) {
   assert(F.getParent() != M.get() && "Other method should be used");
   Function *NewFunction = M->getFunction(F.getName());
   assert((NewFunction == nullptr || NewFunction->isDeclaration()) &&
-                                     "Function already exists");
+         "Function already exists");
   if (!NewFunction) {
     NewFunction = CreateFunction(F, M.get());
     VtoV[&F] = NewFunction;
@@ -221,12 +213,12 @@ Function *FunctionCost::cloneFunctionToInnerModule(Function &F, BasicBlock *&BBI
           }
         }
 
-        //InsertConstantOperands(VtoV, C, M.get());
+        // InsertConstantOperands(VtoV, C, M.get());
       } // for (auto &Op : I.operands()) {
-    } // for (auto &I : BB)
-  } // for (auto &BB : F)
+    }   // for (auto &I : BB)
+  }     // for (auto &BB : F)
 
-  SmallVector<ReturnInst*, 8> Returns;
+  SmallVector<ReturnInst *, 8> Returns;
   CloneFunctionInto(NewFunction, &F, VtoV, true, Returns);
 
   BBInterest = cast<BasicBlock>(VtoV[BBInterest]);
@@ -235,8 +227,11 @@ Function *FunctionCost::cloneFunctionToInnerModule(Function &F, BasicBlock *&BBI
   return NewFunction;
 }
 
-llvm::Function *FunctionCost::cloneInnerFunction(llvm::Function &F, BasicBlock *&BB, const StringRef NewName) {
-  assert(F.getParent() == M.get() && "Function from other module shouldn't be used");
+llvm::Function *FunctionCost::cloneInnerFunction(llvm::Function &F,
+                                                 BasicBlock *&BB,
+                                                 const StringRef NewName) {
+  assert(F.getParent() == M.get() &&
+         "Function from other module shouldn't be used");
   ValueToValueMapTy LocalVtoV;
   Function *NewFunction = CloneFunction(&F, LocalVtoV);
   NewFunction->setName(NewName);
@@ -244,11 +239,7 @@ llvm::Function *FunctionCost::cloneInnerFunction(llvm::Function &F, BasicBlock *
   return NewFunction;
 }
 
-
-FunctionCost::~FunctionCost() {
-  deinitializeAdditionInfo();
-}
-
+FunctionCost::~FunctionCost() { deinitializeAdditionInfo(); }
 
 static void eraseFunctionAndSurroundings(Function *F) {
   if (!F->hasNUsesOrMore(1)) {
@@ -259,7 +250,8 @@ static void eraseFunctionAndSurroundings(Function *F) {
   for (auto U : F->users()) {
     if (auto I = dyn_cast<Instruction>(U)) {
       (void)I;
-      assert(I->getModule() == F->getParent() && "We should not touch our primary module");
+      assert(I->getModule() == F->getParent() &&
+             "We should not touch our primary module");
     }
 
     U->dropAllReferences();
@@ -267,7 +259,6 @@ static void eraseFunctionAndSurroundings(Function *F) {
 
   assert(F->use_empty() && "F still contains users");
   F->eraseFromParent();
-
 }
 
 void FunctionCost::clearFunctions() {
@@ -287,7 +278,7 @@ void FunctionCost::clearFunctions() {
 }
 
 Expected<llvm::SmallVector<size_t, 8>> FunctionCost::getFunctionSizes(
-  const llvm::SmallVectorImpl<llvm::Function *> &Fs) {
+    const llvm::SmallVectorImpl<llvm::Function *> &Fs) {
   for (auto F : Fs) {
     Function *MF = M->getFunction(F->getName());
     (void)MF;
@@ -323,8 +314,9 @@ Expected<llvm::SmallVector<size_t, 8>> FunctionCost::getFunctionSizes(
       continue;
     }
     StringRef Name = *ExpName;
-    size_t Id = find_if(Fs, [Name](Function *F)
-      { return F->getName() == Name; }) - Fs.begin();
+    size_t Id =
+        find_if(Fs, [Name](Function *F) { return F->getName() == Name; }) -
+        Fs.begin();
     if (Id != Fs.size())
       Result[Id] = I.second;
   }

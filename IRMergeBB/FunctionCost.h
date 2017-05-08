@@ -18,9 +18,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include <memory>
-#include <llvm/Support/Error.h>
+#include "llvm/Support/Error.h"
 #include "llvm/Transforms/Utils/ValueMapper.h" // typedef ValueToValueMapTy
+#include <memory>
 
 class ModuleMaterializer;
 
@@ -29,10 +29,13 @@ public:
   FunctionCost(const llvm::Module &OtherM);
 
   // for creating functions directly in this module
-  llvm::Module &getModule() { assert(isInitialized()); return *M;}
+  llvm::Module &getModule() {
+    assert(isInitialized());
+    return *M;
+  }
 
-  llvm::Expected<llvm::SmallVector<size_t, 8>> getFunctionSizes(
-                                                const llvm::SmallVectorImpl<llvm::Function *> &Fs);
+  llvm::Expected<llvm::SmallVector<size_t, 8>>
+  getFunctionSizes(const llvm::SmallVectorImpl<llvm::Function *> &Fs);
 
   ~FunctionCost();
 
@@ -42,7 +45,7 @@ public:
   llvm::Function *cloneInnerFunction(llvm::Function &F, llvm::BasicBlock *&BB,
                                      const llvm::StringRef NewName);
 
-  bool isInitialized() {return IsInitialized; }
+  bool isInitialized() { return IsInitialized; }
 
 private:
   void clearFunctions();

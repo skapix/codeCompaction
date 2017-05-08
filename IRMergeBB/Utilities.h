@@ -19,17 +19,13 @@ public:
   BBComparator::BasicBlockHash getHash() const { return Hash; }
 };
 
-
 /// Comparator for BBNode
 class BBNodeCmp {
-  enum
-  {
-    ArraySize = 3
-  };
+  enum { ArraySize = 3 };
   using BaseHashElem = std::tuple<uintptr_t, uintptr_t, int>;
   mutable struct SmallHashMap {
     BaseHashElem Elems[ArraySize];
-    SmallHashMap() : Elems({std::make_tuple(0, 0, 0)}) {};
+    SmallHashMap() : Elems({std::make_tuple(0, 0, 0)}){};
     size_t idx = 0;
 
     void push_back(uintptr_t V1, uintptr_t V2, int R) {
@@ -57,6 +53,7 @@ class BBNodeCmp {
   } LastHasher;
 
   BBComparator BBCmp;
+
 public:
   BBNodeCmp(GlobalNumberState *GN, const DataLayout &DL) : BBCmp(GN, DL) {}
 
@@ -65,15 +62,16 @@ public:
 
     if (LHS.getHash() != RHS.getHash())
       return LHS.getHash() < RHS.getHash();
-    Optional<int> Hashed = LastHasher.getResult(reinterpret_cast<uintptr_t >(LHS.getBB()),
-                                                reinterpret_cast<uintptr_t >(RHS.getBB()));
+    Optional<int> Hashed =
+        LastHasher.getResult(reinterpret_cast<uintptr_t>(LHS.getBB()),
+                             reinterpret_cast<uintptr_t>(RHS.getBB()));
 
     if (Hashed)
       return *Hashed == -1;
 
     int Result = BBCmp.compare(LHS.getBB(), RHS.getBB());
-    LastHasher.push_back(reinterpret_cast<uintptr_t >(LHS.getBB()),
-                         reinterpret_cast<uintptr_t >(RHS.getBB()), Result);
+    LastHasher.push_back(reinterpret_cast<uintptr_t>(LHS.getBB()),
+                         reinterpret_cast<uintptr_t>(RHS.getBB()), Result);
 
     return Result == -1;
   }
@@ -81,16 +79,13 @@ public:
 /// Give unique name to function
 class FunctionNameCreator {
 public:
-  FunctionNameCreator(const Module &M) : M(M), Slot(0)
-  {}
+  FunctionNameCreator(const Module &M) : M(M), Slot(0) {}
   std::string getName();
 
 private:
   const Module &M;
   uint64_t Slot;
 };
-
-
 
 ////////// Location of merged instructions //////////
 
@@ -128,9 +123,7 @@ public:
            SpecialInsts[Id] == Type::MoveAfter;
   }
 
-  bool isUsedOutsideFunction(const size_t Id) const {
-    return !isUsual(Id);
-  }
+  bool isUsedOutsideFunction(const size_t Id) const { return !isUsual(Id); }
 
   Type operator[](const size_t i) const { return SpecialInsts[i]; }
 
@@ -141,7 +134,6 @@ public:
 private:
   SmallVector<Type, 64> SpecialInsts;
 };
-
 
 /// Class is used to find values in sorted array.
 /// Values, that should be found must be ordered.
@@ -201,6 +193,4 @@ BasicBlock *getMappedBBofIdenticalFunctions(const BasicBlock *BBToMap,
 } // namespace utilities
 } // namespace llvm
 
-
-
-#endif //LLVMTRANSFORM_UTILITIES_H
+#endif // LLVMTRANSFORM_UTILITIES_H
