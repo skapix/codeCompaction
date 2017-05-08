@@ -23,6 +23,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+// TODO: calculate unwind info, when computing function sizes
 // TODO: it is also possible to map metadata. Will metadata mapping increase
 // accuracy of exact size?
 // TODO: now we are unable to include CommandFlags because of
@@ -295,24 +296,28 @@ Expected<llvm::SmallVector<size_t, 8>> FunctionCost::getFunctionSizes(
     return ExpectedObject.takeError();
   }
   auto Obj = ExpectedObject->get();
-
   auto VecNameSize = object::computeSymbolSizes(*Obj);
   llvm::SmallVector<size_t, 8> Result(Fs.size(), 0);
 
   for (auto &I : VecNameSize) {
+    if (!I.second)
+      continue;
+
     auto ExpType = I.first.getType();
     if (!ExpType) {
       consumeError(ExpType.takeError());
       continue;
     }
+
     if (*ExpType != object::SymbolRef::ST_Function)
       continue;
-    auto ExpName = I.first.getName();
 
+    auto ExpName = I.first.getName();
     if (!ExpName) {
       consumeError(ExpName.takeError());
       continue;
     }
+
     StringRef Name = *ExpName;
     size_t Id =
         find_if(Fs, [Name](Function *F) { return F->getName() == Name; }) -

@@ -96,7 +96,7 @@ if __name__ == "__main__":
     (currently .ll, .bc .c, .cpp) for x86-64 and arm architectures:  with and without bbfactor optimizaton.\
     Further it compares code sizes of the created object files')
 
-    parser.add_argument('filenames', nargs='+', help='Filenames to be compared with their optimized versions')
+    parser.add_argument('filenames', nargs='*', help='Filenames to be compared with their optimized versions')
     parser.add_argument('--arch', nargs='*', choices=g_arches.keys(), default=g_arches.keys(),
                         help='Choose architecture. All by default')
     parser.add_argument('--args', nargs='*', default="", type=parseAdditionalArguments,  help="Additional args in view like 'utility:extra flags'")
@@ -109,6 +109,7 @@ if __name__ == "__main__":
         if os.path.exists(g_commonDir):
             shutil.rmtree(g_commonDir)
         sys.exit()
+
 
 
     filenames = []
