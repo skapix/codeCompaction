@@ -104,7 +104,6 @@ FunctionCost::FunctionCost(const Module &OtherM)
                                : OtherM.getTargetTriple();
 
   copyModuleInfo(OtherM, *M);
-  M->setDataLayout(OtherM.getDataLayout());
   M->setTargetTriple(TripleName);
   // initialize copying info
   Mapper = make_unique<ValueMapper>(VtoV, RF_NullMapMissingGlobalValues,
@@ -133,6 +132,7 @@ FunctionCost::FunctionCost(const Module &OtherM)
 
   TM.reset(TheTarget->createTargetMachine(TripleName, CPUStr, FeaturesStr,
                                           Options, Optional<Reloc::Model>()));
+  M->setDataLayout(TM->createDataLayout());
 
   if (!TM.get()) {
     DEBUG(dbgs() << "Can't create TargetMachine\n");
