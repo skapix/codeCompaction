@@ -1,8 +1,15 @@
 #ifndef LLVMTRANSFORM_UTILITIES_H
 #define LLVMTRANSFORM_UTILITIES_H
+
 #include "CompareBB.h"
+#include <llvm/Support/Error.h>
 
 namespace llvm {
+
+namespace object {
+class ObjectFile;
+}
+
 namespace utilities {
 /// Auxiliary class, that holds basic block and it's hash.
 /// Used BB for comparison
@@ -189,6 +196,12 @@ template <typename T> bool SmartSortedSet<T>::contains(T InstId) const {
 
 BasicBlock *getMappedBBofIdenticalFunctions(const BasicBlock *BBToMap,
                                             Function *F);
+
+// TODO: probably we need one more argument ~ arch
+size_t getEHSize(const object::ObjectFile &F);
+
+SmallVector<size_t, 8> getFunctionSizes(const object::ObjectFile &F,
+                                        const SmallVectorImpl<StringRef> &Fs);
 
 } // namespace utilities
 } // namespace llvm

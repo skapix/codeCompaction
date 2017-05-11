@@ -1,4 +1,5 @@
-//===-- FunctionCost.h - Calculates function size--------------------------===//
+//===-- FunctionCompiler.h - Calculates function
+//size--------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -23,10 +24,17 @@
 #include <memory>
 
 class ModuleMaterializer;
+namespace llvm {
+namespace object {
+class ObjectFile;
+}
+} // namespace llvm
 
-class FunctionCost {
+class FunctionCompiler {
 public:
-  FunctionCost(const llvm::Module &OtherM);
+  FunctionCompiler(const llvm::Module &OtherM);
+
+  bool isInitialized() const { return IsInitialized; }
 
   // for creating functions directly in this module
   llvm::Module &getModule() {
@@ -34,21 +42,22 @@ public:
     return *M;
   }
 
-  llvm::Expected<llvm::SmallVector<size_t, 8>>
-  getFunctionSizes(const llvm::SmallVectorImpl<llvm::Function *> &Fs);
+  // returns true, if succeeded
+  bool compile();
 
-  ~FunctionCost();
+  void clearModule();
+
+  ~FunctionCompiler();
 
   llvm::Function *cloneFunctionToInnerModule(llvm::Function &F,
-                                             llvm::BasicBlock *&BB);
+                                             llvm::BasicBlock **BB = nullptr);
 
   llvm::Function *cloneInnerFunction(llvm::Function &F, llvm::BasicBlock *&BB,
                                      const llvm::StringRef NewName);
 
-  bool isInitialized() { return IsInitialized; }
+  llvm::Value *getInnerModuleValue(llvm::Value &V);
 
-private:
-  void clearFunctions();
+  const llvm::object::ObjectFile &getObject() const { return *Obj; }
 
 private:
   std::unique_ptr<llvm::Module> M;
@@ -62,6 +71,7 @@ private:
   std::unique_ptr<llvm::TargetMachine> TM;
   llvm::raw_svector_ostream OS;
   llvm::SmallVector<char, 1024> OSBuf;
+  std::unique_ptr<llvm::object::ObjectFile> Obj;
 
   bool IsInitialized;
 };

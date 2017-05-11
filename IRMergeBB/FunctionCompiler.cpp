@@ -1,4 +1,5 @@
-//===-- FunctionCost.cpp - Calculates function size--------------*- C++ -*-===//
+//===-- FunctionCompiler.cpp - Calculates function size--------------*- C++
+//-*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "FunctionCost.h"
+#include "FunctionCompiler.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -95,7 +96,7 @@ static void copyModuleInfo(const Module &From, Module &To) {
   To.setPIELevel(From.getPIELevel());
 }
 
-FunctionCost::FunctionCost(const Module &OtherM)
+FunctionCompiler::FunctionCompiler(const Module &OtherM)
     : M(make_unique<Module>("FunctionCost_auxiliary", OtherM.getContext())),
       Materializer(make_unique<ModuleMaterializer>(*M)), OS(OSBuf),
       IsInitialized(false) {
@@ -175,8 +176,9 @@ static void resetFunctionReplaces(Function &F, ValueToValueMapTy &Result) {
   }
 }
 
-Function *FunctionCost::cloneFunctionToInnerModule(Function &F,
-                                                   BasicBlock *&BBInterest) {
+Function *
+FunctionCompiler::cloneFunctionToInnerModule(Function &F,
+                                             BasicBlock **BBInterest) {
   assert(F.getParent() != M.get() && "Other method should be used");
   Function *NewFunction = M->getFunction(F.getName());
   assert((NewFunction == nullptr || NewFunction->isDeclaration()) &&
@@ -222,15 +224,16 @@ Function *FunctionCost::cloneFunctionToInnerModule(Function &F,
   SmallVector<ReturnInst *, 8> Returns;
   CloneFunctionInto(NewFunction, &F, VtoV, true, Returns);
 
-  BBInterest = cast<BasicBlock>(VtoV[BBInterest]);
+  if (BBInterest)
+    *BBInterest = cast<BasicBlock>(VtoV[*BBInterest]);
 
   resetFunctionReplaces(F, VtoV);
   return NewFunction;
 }
 
-llvm::Function *FunctionCost::cloneInnerFunction(llvm::Function &F,
-                                                 BasicBlock *&BB,
-                                                 const StringRef NewName) {
+llvm::Function *FunctionCompiler::cloneInnerFunction(llvm::Function &F,
+                                                     BasicBlock *&BB,
+                                                     const StringRef NewName) {
   assert(F.getParent() == M.get() &&
          "Function from other module shouldn't be used");
   ValueToValueMapTy LocalVtoV;
@@ -240,93 +243,60 @@ llvm::Function *FunctionCost::cloneInnerFunction(llvm::Function &F,
   return NewFunction;
 }
 
-FunctionCost::~FunctionCost() { deinitializeAdditionInfo(); }
+FunctionCompiler::~FunctionCompiler() { deinitializeAdditionInfo(); }
 
-static void eraseFunctionAndSurroundings(Function *F) {
-  if (!F->hasNUsesOrMore(1)) {
-    F->eraseFromParent();
-    return;
-  }
 
-  for (auto U : F->users()) {
+// \p M is for debug and catching errors
+static void eraseSurroundings(Value &V, Module *M = nullptr) {
+
+  for (auto U : V.users()) {
     if (auto I = dyn_cast<Instruction>(U)) {
       (void)I;
-      assert(I->getModule() == F->getParent() &&
+      assert(I->getModule() == M &&
              "We should not touch our primary module");
     }
 
     U->dropAllReferences();
   }
 
-  assert(F->use_empty() && "F still contains users");
-  F->eraseFromParent();
+  assert(V.use_empty() && "V still contains users");
 }
 
-void FunctionCost::clearFunctions() {
-  // TODO: don't erase declarations
+void FunctionCompiler::clearModule() {
   VtoV.clear();
+  // TODO: ? don't erase declarations
 
   auto It = M->begin();
   while (It != M->end()) {
-    eraseFunctionAndSurroundings(&*It);
+    if (It->hasNUsesOrMore(1)) {
+      eraseSurroundings(*It, It->getParent());
+    }
+    It->eraseFromParent();
     It = M->begin();
   }
   auto GVIt = M->global_begin();
   while (GVIt != M->global_end()) {
+    if (GVIt->hasNUsesOrMore(1)) {
+      eraseSurroundings(*GVIt, GVIt->getParent());
+    }
     GVIt->eraseFromParent();
     GVIt = M->global_begin();
   }
 }
 
-Expected<llvm::SmallVector<size_t, 8>> FunctionCost::getFunctionSizes(
-    const llvm::SmallVectorImpl<llvm::Function *> &Fs) {
-  for (auto F : Fs) {
-    Function *MF = M->getFunction(F->getName());
-    (void)MF;
-    assert(MF->hasName() && "Functions are connected with MC via names");
-    assert(MF && "Function was not created");
-    assert(!MF->isDeclaration() && "Function should have body");
-  }
-
+bool FunctionCompiler::compile() {
   PM.run(*M);
   auto Buf = MemoryBufferRef(StringRef(OSBuf.data(), OSBuf.size()), "");
   auto ExpectedObject = object::ObjectFile::createObjectFile(Buf);
   if (!ExpectedObject) {
-    errs() << "Error: could not create an object file\n";
-    return ExpectedObject.takeError();
+    DEBUG(dbgs() << "Error: could not create an object file\n");
+    return false;
   }
-  auto Obj = ExpectedObject->get();
-  auto VecNameSize = object::computeSymbolSizes(*Obj);
-  llvm::SmallVector<size_t, 8> Result(Fs.size(), 0);
+  Obj = std::move(*ExpectedObject);
 
-  for (auto &I : VecNameSize) {
-    if (!I.second)
-      continue;
+  return true;
+}
 
-    auto ExpType = I.first.getType();
-    if (!ExpType) {
-      consumeError(ExpType.takeError());
-      continue;
-    }
-
-    if (*ExpType != object::SymbolRef::ST_Function)
-      continue;
-
-    auto ExpName = I.first.getName();
-    if (!ExpName) {
-      consumeError(ExpName.takeError());
-      continue;
-    }
-
-    StringRef Name = *ExpName;
-    size_t Id =
-        find_if(Fs, [Name](Function *F) { return F->getName() == Name; }) -
-        Fs.begin();
-    if (Id != Fs.size())
-      Result[Id] = I.second;
-  }
-
-  clearFunctions();
-
-  return Result;
+llvm::Value *FunctionCompiler::getInnerModuleValue(llvm::Value &V) {
+  return Mapper->mapValue(V);
 }

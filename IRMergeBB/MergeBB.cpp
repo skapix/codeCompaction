@@ -23,11 +23,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "CompareBB.h"
-#include "FunctionCost.h"
+#include "FunctionCompiler.h"
 #include "Utilities.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <deque>
@@ -83,7 +84,7 @@ private:
   std::unique_ptr<FunctionNameCreator> FNamer;
   GlobalNumberState GlobalNumbers;
   std::map<std::string, size_t> CostHash;
-  std::unique_ptr<FunctionCost> Cost;
+  std::unique_ptr<FunctionCompiler> Cost;
 };
 
 } // end anonymous namespace
@@ -104,7 +105,7 @@ bool MergeBB::runOnModule(Module &M) {
   DEBUG(dbgs() << "Module name: ");
   DEBUG(dbgs().write_escaped(M.getName()) << '\n');
 
-  Cost = std::make_unique<FunctionCost>(M);
+  Cost = std::make_unique<FunctionCompiler>(M);
   FNamer = std::make_unique<FunctionNameCreator>(M);
   if (!Cost->isInitialized())
     return false;
@@ -217,6 +218,27 @@ static bool skipFromMerging(const BasicBlock *BB) {
     debugPrint(BB, "Block family is too small to bother merging");
     return true;
   }
+
+  // we don't create function with variadic arguments (VA) because
+  // we use fastcc calling convention and we don't create VA functions
+  static Intrinsic::ID BadIntrinsics[] = {
+      Intrinsic::ID::vastart, Intrinsic::ID::vaend, Intrinsic::ID::vacopy};
+
+  for (auto &It : *BB) {
+    auto II = dyn_cast<IntrinsicInst>(&It);
+    if (II == nullptr)
+      continue;
+    auto ID = II->getIntrinsicID();
+    if (any_of(BadIntrinsics, [ID](Intrinsic::ID Bad) { return ID == Bad; }))
+      return true;
+  }
+
+  //  if (std::any_of(BB->begin(), BB->end(), [](const
+  //  BasicBlock::const_iterator &I) {
+  //    return false;
+  //  }))
+  //    return true;
+
   return false;
 }
 
@@ -1044,14 +1066,6 @@ static size_t findAppropriateBBsId(const ArrayRef<BBInfo> BBs,
   return i;
 }
 
-Function *cloneFunction(Function *F, BasicBlock *&BBOut) {
-  ValueToValueMapTy Tmp;
-  Function *Ret = CloneFunction(F, Tmp);
-  Value *V = Tmp[BBOut];
-  BBOut = cast<BasicBlock>(V);
-  return Ret;
-}
-
 ///
 /// \param F ~ Function to be called
 /// \param OtherInfo ~ Info, going to be cloned and used for factoring out
@@ -1063,15 +1077,15 @@ static void replaceBBInOtherFunction(Function *F, const BBInfo &OtherInfo,
   replaceBBWithCall(M2BBInfo, F);
 }
 
-// \p F is our merged function, \p MBBInfo is going to make a call to it.
+// \p F is our merged function, \p MBBInfos are going to make a call to it.
 // Procedure replace basic block in function anyway
-static Function *addReplacedFunction(FunctionCost &FC, Function *F,
+static Function *addReplacedFunction(FunctionCompiler &FC, Function *F,
                                      ArrayRef<BBInfo> MBBInfos) {
   const BBInfo &MBBInfo = MBBInfos.front();
   BasicBlock *ClonedBB = MBBInfo.getBB();
   // M2 stands for other module, that is in Function Cost
   Function *CommonFunction =
-      FC.cloneFunctionToInnerModule(*MBBInfo.getBB()->getParent(), ClonedBB);
+      FC.cloneFunctionToInnerModule(*MBBInfo.getBB()->getParent(), &ClonedBB);
   assert(ClonedBB != MBBInfo.getBB() && "Basic block must have been replaced");
   assert(ClonedBB->getModule() != MBBInfo.getBB()->getModule() &&
          "Basic block must have different modules");
@@ -1091,16 +1105,17 @@ static Function *addReplacedFunction(FunctionCost &FC, Function *F,
   return NewCommonFunction;
 }
 
-static bool shouldReplace(bool FuncCreated, Function *F,
-                          const SmallVector<BBInfo, 8> &BBInfos,
-                          FunctionCost &Cost) {
-  SmallVector<Function *, 16> Funcs;
+// TODO: collapse shouldReplaceCommonChoice and shouldReplacePreciseChoice
+
+static bool shouldReplaceCommonChoice(bool FuncCreated, Function *F,
+                                      const SmallVector<BBInfo, 8> &BBInfos,
+                                      FunctionCompiler &Cost) {
+  SmallVector<StringRef, 16> Funcs;
 
   if (FuncCreated)
-    Funcs.push_back(F);
+    Funcs.push_back(F->getName());
 
-  BasicBlock *NotUsed = &*F->begin();
-  Function *M2F = Cost.cloneFunctionToInnerModule(*F, NotUsed);
+  Function *M2F = Cost.cloneFunctionToInnerModule(*F);
   for (auto It = BBInfos.begin(), EIt = BBInfos.end(); It != EIt;) {
     // We are going to solve a case, when identical basic blocks
     // reside in the same function. In this case we need to replace all
@@ -1111,18 +1126,19 @@ static bool shouldReplace(bool FuncCreated, Function *F,
         });
 
     Function *M2MergedF = addReplacedFunction(Cost, M2F, InSameFunction);
-    Funcs.push_back(It->getBB()->getParent());
-    Funcs.push_back(M2MergedF);
+    Funcs.push_back(It->getBB()->getParent()->getName());
+    Funcs.push_back(M2MergedF->getName());
     It += InSameFunction.size();
   }
 
-  auto ExpResult = Cost.getFunctionSizes(Funcs);
-
-  if (!ExpResult) {
-    consumeError(ExpResult.takeError());
+  if (!Cost.compile()) {
+    DEBUG(dbgs() << "Can't determine module size\n");
+    Cost.clearModule();
     return false;
   }
-  auto &Results = *ExpResult;
+
+  auto Results = getFunctionSizes(Cost.getObject(), Funcs);
+  Cost.clearModule();
 
   int SizeProfit = FuncCreated ? -Results.front() : 0;
   for (size_t i = static_cast<size_t>(FuncCreated); i < Results.size();
@@ -1131,6 +1147,89 @@ static bool shouldReplace(bool FuncCreated, Function *F,
   }
 
   return SizeProfit > 0;
+}
+
+static bool shouldReplacePreciseChoice(bool FuncCreated, Function *Common,
+                                       const SmallVector<BBInfo, 8> &BBInfos,
+                                       FunctionCompiler &Cost) {
+  // TODO: don't create extra functions; Reuse the old ones
+  // get current size of functions
+  SmallVector<StringRef, 16> Funcs;
+  for (auto It = BBInfos.begin(), EIt = BBInfos.end(); It != EIt;) {
+    Function *LastF = It->getBB()->getParent();
+    Funcs.push_back(LastF->getName());
+    Cost.cloneFunctionToInnerModule(*LastF);
+    do {
+      ++It;
+    } while (It != EIt && LastF == It->getBB()->getParent());
+  }
+
+  if (!Cost.compile()) {
+    DEBUG(dbgs() << "Can't determine module size\n");
+    Cost.clearModule();
+    return false;
+  }
+
+  auto OldSizes = getFunctionSizes(Cost.getObject(), Funcs);
+
+  size_t EHOldSize = getEHSize(Cost.getObject());
+  // we can't reuse the same functions because they are modified, when compiled
+  // some instructions might be added
+  Cost.clearModule();
+
+  // compute new size of functions
+
+  Function *NewCommon = nullptr;
+  if (FuncCreated) {
+    Funcs.push_back(Common->getName());
+    NewCommon = Cost.cloneFunctionToInnerModule(*Common);
+  } else {
+    // create a declaration
+    NewCommon = cast<Function>(Cost.getInnerModuleValue(*Common));
+  }
+
+  // clone and modify functions
+  for (auto It = BBInfos.begin(), EIt = BBInfos.end(); It != EIt;) {
+    ArrayRef<BBInfo> InSameFunction =
+        ArrayRef<BBInfo>(It, EIt).take_while([It](const BBInfo &I) -> bool {
+          return I.getBB()->getParent() == It->getBB()->getParent();
+        });
+    Function *NewF = Cost.cloneFunctionToInnerModule(*It->getBB()->getParent());
+    for (auto &Info : InSameFunction) {
+      BasicBlock *BB = Info.getBB();
+      BB = getMappedBBofIdenticalFunctions(BB, NewF);
+      replaceBBInOtherFunction(NewCommon, Info, BB);
+      ++It;
+    }
+  }
+
+  if (!Cost.compile()) {
+    DEBUG(dbgs() << "Can't determine module size\n");
+    Cost.clearModule();
+    return false;
+  }
+  auto NewSizes = getFunctionSizes(Cost.getObject(), Funcs);
+
+  size_t EHNewSize = getEHSize(Cost.getObject());
+  Cost.clearModule();
+
+  int SizeProfit = FuncCreated ? -NewSizes.back() : 0;
+  for (size_t i = 0, ei = OldSizes.size(); i < ei; ++i) {
+    SizeProfit += OldSizes[i] - NewSizes[i];
+  }
+  SizeProfit += EHOldSize - EHNewSize;
+  return SizeProfit > 0;
+}
+
+static bool shouldReplace(bool FuncCreated, Function *F,
+                          const SmallVector<BBInfo, 8> &BBInfos,
+                          FunctionCompiler &Cost) {
+  AttributeSet FnAttr = F->getAttributes().getFnAttributes();
+  // TODO: understand NoUnwind attribute
+  if (FnAttr.hasAttribute(Attribute::NoUnwind))
+    return shouldReplaceCommonChoice(FuncCreated, F, BBInfos, Cost);
+  else
+    return shouldReplacePreciseChoice(FuncCreated, F, BBInfos, Cost);
 }
 
 /// Common steps of replacing equal basic blocks

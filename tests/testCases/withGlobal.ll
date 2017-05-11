@@ -1,6 +1,6 @@
 ; check, that it optimizes without errors
 ; RUN: opt -S -load  %opt_path %pass_name %force_flag < %s | FileCheck %s
-; Also test FunctionCost
+; Also test FunctionCompiler
 ; RUN: opt -S -load  %opt_path %pass_name < %s
 ; RUN: %lli_comp -v %s
 
