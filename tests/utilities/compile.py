@@ -34,8 +34,8 @@ def addArg(key, val):
 def createProcess(query):
     process = subprocess.Popen(
         query.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ecode = process.wait()
     out, err = process.communicate()
+    ecode = process.wait()
     return (ecode, out.decode("utf-8"), err.decode("utf-8"))
 
 
