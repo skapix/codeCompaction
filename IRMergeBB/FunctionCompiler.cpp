@@ -16,7 +16,6 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolSize.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -41,7 +40,6 @@ static Function *CreateFunction(const Function &F, Module *M,
   assert(M->getFunction(NewName) == nullptr && "Function already exists");
   Function *NF =
       Function::Create(F.getFunctionType(), F.getLinkage(), NewName, M);
-  // TODO: check function copies function attributes
   NF->copyAttributesFrom(&F);
   if (NF->getLinkage() == Function::LinkageTypes::PrivateLinkage ||
       NF->getLinkage() == Function::LinkageTypes::InternalLinkage)
@@ -78,6 +76,9 @@ Value *ModuleMaterializer::materialize(Value *V) {
   } else if (auto F = dyn_cast<Function>(V)) {
     return CreateFunction(*F, M);
   }
+
+  // TODO: ? GlobalAlias
+
   return nullptr;
 }
 
@@ -101,9 +102,9 @@ FunctionCompiler::FunctionCompiler(const Module &OtherM)
       Materializer(make_unique<ModuleMaterializer>(*M)), OS(OSBuf),
       IsInitialized(false) {
 
-  std::string TripleName = OtherM.getTargetTriple().empty()
-                               ? sys::getDefaultTargetTriple()
-                               : OtherM.getTargetTriple();
+  std::string TripleName = OtherM.getTargetTriple().empty() ?
+                           Triple::normalize(sys::getDefaultTargetTriple()) :
+                           Triple::normalize(OtherM.getTargetTriple());
 
   copyModuleInfo(OtherM, *M);
   M->setTargetTriple(TripleName);
@@ -114,10 +115,9 @@ FunctionCompiler::FunctionCompiler(const Module &OtherM)
   // initialize compiling info
   initializeAdditionInfo();
 
-  // Take a look at include todo
-  //  std::string CPUStr = getCPUStr(), FeaturesStr = getFeaturesStr();
-  // now extract features and cpu from function
-  std::string CPUStr = "", FeaturesStr = "";
+  std::string CPUStr; // = getCPUStr();
+  std::string FeaturesStr; // = getFeaturesStr();
+
 
   std::string ErrorStr;
 
@@ -146,7 +146,7 @@ FunctionCompiler::FunctionCompiler(const Module &OtherM)
   PM.add(new TargetLibraryInfoWrapperPass(TLII));
 
   if (TM->addPassesToEmitFile(PM, OS, TargetMachine::CGFT_ObjectFile)) {
-    DEBUG(dbgs() << "Can't compile module\n");
+    DEBUG(dbgs() << "Can't initialize pass manager\n");
     return;
   }
 
@@ -282,6 +282,15 @@ void FunctionCompiler::clearModule() {
     GVIt->eraseFromParent();
     GVIt = M->global_begin();
   }
+  auto AIt = M->alias_begin();
+  while (AIt != M->alias_end()) {
+    if (AIt->hasNUsesOrMore(1)) {
+      eraseSurroundings(*AIt, AIt->getParent());
+    }
+    AIt->eraseFromParent();
+    AIt = M->alias_begin();
+  }
+
 }
 
 bool FunctionCompiler::compile() {

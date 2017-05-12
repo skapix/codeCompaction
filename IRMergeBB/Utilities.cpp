@@ -77,7 +77,7 @@ size_t getEHSize(const object::ObjectFile &F) {
     StringRef SR;
     if (S.getName(SR))
       continue;
-    if (SR == ".eh_frame")
+    if (SR == ".eh_frame" || SR == ".ARM.exidx")
       return S.getSize();
   }
   return 0;
