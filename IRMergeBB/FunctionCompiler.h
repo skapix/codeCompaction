@@ -1,5 +1,5 @@
 //===-- FunctionCompiler.h - Calculates function
-//size--------------------------===//
+// size--------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //

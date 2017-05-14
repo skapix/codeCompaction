@@ -30,8 +30,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-
-#include <deque>
+#include "llvm/ADT/DenseSet.h"
 
 // TODO: add partial replacing (several replaced, others not)
 // TODO: create cache for sized functions
@@ -122,8 +121,8 @@ bool MergeBB::runOnModule(Module &M) {
   }
 
   using VectorOfBBs = SmallVector<BasicBlock *, 16>;
-  auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(
-      BBNodeCmp(&GlobalNumbers, M.getDataLayout()));
+  auto BBTree =
+      std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   // merge hashed values into map
   for (const auto &Node : HashedBBs) {
@@ -169,32 +168,6 @@ bool MergeBB::runOnModule(Module &M) {
   }
 
   return Changed;
-}
-
-/// \return end iterator of the merged part of \p BB
-static inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
-  assert(isa<TerminatorInst>(BB->back()));
-  return std::prev(BB->end());
-}
-
-static inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
-  assert(isa<TerminatorInst>(BB->back()));
-  return std::prev(BB->end());
-}
-
-/// \return begin iterator of the merged part of \p BB
-static inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
-  auto It = BB->begin();
-  while (isa<PHINode>(It))
-    ++It;
-  return It;
-}
-
-static inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
-  auto It = BB->begin();
-  while (isa<PHINode>(It))
-    ++It;
-  return It;
 }
 
 static void debugPrint(const BasicBlock *BB, const StringRef Str = "",
@@ -1226,7 +1199,7 @@ static bool shouldReplace(bool FuncCreated, Function *F,
                           FunctionCompiler &Cost) {
   AttributeSet FnAttr = F->getAttributes().getFnAttributes();
   // TODO: understand NoUnwind attribute
-  if (FnAttr.hasAttribute(Attribute::NoUnwind))
+  if (FnAttr.hasFnAttribute(Attribute::NoUnwind))
     return shouldReplaceCommonChoice(FuncCreated, F, BBInfos, Cost);
   else
     return shouldReplacePreciseChoice(FuncCreated, F, BBInfos, Cost);

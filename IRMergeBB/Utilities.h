@@ -2,7 +2,8 @@
 #define LLVMTRANSFORM_UTILITIES_H
 
 #include "CompareBB.h"
-#include <llvm/Support/Error.h>
+#include "llvm/Support/Error.h"
+#include "llvm/IR/Instructions.h"
 
 namespace llvm {
 
@@ -11,6 +12,33 @@ class ObjectFile;
 }
 
 namespace utilities {
+
+/// \return end iterator of the merged part of \p BB
+inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
+  assert(isa<TerminatorInst>(BB->back()));
+  return std::prev(BB->end());
+}
+
+inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
+  assert(isa<TerminatorInst>(BB->back()));
+  return std::prev(BB->end());
+}
+
+/// \return begin iterator of the merged part of \p BB
+inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
+  auto It = BB->begin();
+  while (isa<PHINode>(It))
+    ++It;
+  return It;
+}
+
+inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
+  auto It = BB->begin();
+  while (isa<PHINode>(It))
+    ++It;
+  return It;
+}
+
 /// Auxiliary class, that holds basic block and it's hash.
 /// Used BB for comparison
 class BBNode {
@@ -59,10 +87,10 @@ class BBNodeCmp {
 
   } LastHasher;
 
-  BBComparator BBCmp;
+  mutable BBComparator BBCmp;
 
 public:
-  BBNodeCmp(GlobalNumberState *GN, const DataLayout &DL) : BBCmp(GN, DL) {}
+  BBNodeCmp(GlobalNumberState *GN) : BBCmp(GN) {}
 
   bool operator()(const BBNode &LHS, const BBNode &RHS) const {
     // Order first by hashes, then full function comparison.
@@ -76,7 +104,7 @@ public:
     if (Hashed)
       return *Hashed == -1;
 
-    int Result = BBCmp.compare(LHS.getBB(), RHS.getBB());
+    int Result = BBCmp.compareBB(LHS.getBB(), RHS.getBB());
     LastHasher.push_back(reinterpret_cast<uintptr_t>(LHS.getBB()),
                          reinterpret_cast<uintptr_t>(RHS.getBB()), Result);
 

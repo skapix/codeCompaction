@@ -102,9 +102,10 @@ FunctionCompiler::FunctionCompiler(const Module &OtherM)
       Materializer(make_unique<ModuleMaterializer>(*M)), OS(OSBuf),
       IsInitialized(false) {
 
-  std::string TripleName = OtherM.getTargetTriple().empty() ?
-                           Triple::normalize(sys::getDefaultTargetTriple()) :
-                           Triple::normalize(OtherM.getTargetTriple());
+  std::string TripleName =
+      OtherM.getTargetTriple().empty()
+          ? Triple::normalize(sys::getDefaultTargetTriple())
+          : Triple::normalize(OtherM.getTargetTriple());
 
   copyModuleInfo(OtherM, *M);
   M->setTargetTriple(TripleName);
@@ -115,9 +116,8 @@ FunctionCompiler::FunctionCompiler(const Module &OtherM)
   // initialize compiling info
   initializeAdditionInfo();
 
-  std::string CPUStr; // = getCPUStr();
+  std::string CPUStr;      // = getCPUStr();
   std::string FeaturesStr; // = getFeaturesStr();
-
 
   std::string ErrorStr;
 
@@ -170,7 +170,7 @@ static void getFunctionReplaces(Function &F, Function &NewF,
 static void resetFunctionReplaces(Function &F, ValueToValueMapTy &Result) {
   // don't erase mapping to Function itself
   for (auto AF = F.arg_begin(), EAF = F.arg_end(); AF != EAF; ++AF) {
-    bool Erased = Result.erase(AF);
+    bool Erased = Result.erase(&*AF);
     (void)Erased;
     assert(Erased && "Inconsistency");
   }
@@ -245,15 +245,13 @@ llvm::Function *FunctionCompiler::cloneInnerFunction(llvm::Function &F,
 
 FunctionCompiler::~FunctionCompiler() { deinitializeAdditionInfo(); }
 
-
 // \p M is for debug and catching errors
 static void eraseSurroundings(Value &V, Module *M = nullptr) {
 
   for (auto U : V.users()) {
     if (auto I = dyn_cast<Instruction>(U)) {
       (void)I;
-      assert(I->getModule() == M &&
-             "We should not touch our primary module");
+      assert(I->getModule() == M && "We should not touch our primary module");
     }
 
     U->dropAllReferences();
@@ -290,7 +288,6 @@ void FunctionCompiler::clearModule() {
     AIt->eraseFromParent();
     AIt = M->alias_begin();
   }
-
 }
 
 bool FunctionCompiler::compile() {
