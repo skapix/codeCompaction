@@ -51,12 +51,15 @@ def getBinaryCodeSize(filename, arch):
 
 
 def printSizes(f, fOpt):
+    diff = f - fOpt
+    percentage = (f - fOpt) / f
+    additionalInfo = '; {0}; {1:.2%}'.format(diff, percentage)
     if f < fOpt:
-        printFailure(str(f) + " < " + str(fOpt))
+        printFailure(str(f) + " < " + str(fOpt) + additionalInfo)
     elif f == fOpt:
         print(f, "==", fOpt)
     else:
-        printSuccess(str(f) + " > " + str(fOpt))
+        printSuccess(str(f) + " > " + str(fOpt) + additionalInfo)
 
 
 def compareBinaryFileSizes(filename, archList, isVerbose):
@@ -80,7 +83,7 @@ def compareBinaryFileSizes(filename, archList, isVerbose):
 
 
 def applyCompare(filenames, arches, isVerbose):
-    print("Original Size | sign | Optimized size")
+    print("Original Size | sign | Optimized size | Difference | Optimized")
     for filename in filenames:
         print("File:", filename)
         try:

@@ -13,10 +13,7 @@ g_link = "llvm-link"
 g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
 g_testPath = os.path.dirname(os.path.abspath(__file__)) + "/testCases"
 
-g_armInclude = "/usr/arm-linux-gnueabihf/include/"
-g_armIncludeCpp1 = g_armInclude + "c++/6.3.1/"
-g_armIncludeCpp2 = g_armIncludeCpp1 + "arm-linux-gnueabihf/"
-
+g_armRoot = "/usr/arm-linux-gnueabihf/"
 
 class CompileInfo:
     def __init__(self, program, defaultArgs, outputExt):
@@ -39,12 +36,12 @@ class ArchInfo:
 # arches to architecture-dependent arguments
 
 g_clangX64Arch = "-target x86_64-linux-gnu"
-g_clangArmArchInclude = "-target arm-linux-gnueabihf -I"
+g_clangArmArch = "-target arm-linux-gnueabihf --sysroot="
 
 g_arches = {"x64": {"clang++": ArchInfo(g_clangX64Arch), "clang": ArchInfo(g_clangX64Arch),
                     "llc": ArchInfo("-march=x86-64"), "size": ArchInfo("size")},
-            "arm": {"clang++": ArchInfo(g_clangArmArchInclude + g_armIncludeCpp1 + " -I" + g_armIncludeCpp2),
-                    "clang": ArchInfo(g_clangArmArchInclude + g_armInclude),
+            "arm": {"clang++": ArchInfo(g_clangArmArch + g_armRoot),
+                    "clang": ArchInfo(g_clangArmArch + g_armRoot),
                     "llc": ArchInfo("-march=arm"), "size": ArchInfo("arm-linux-gnueabihf-size") }}
 
 g_commonDir = "tmpFactored"
