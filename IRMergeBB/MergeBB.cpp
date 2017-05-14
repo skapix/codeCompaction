@@ -23,12 +23,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "CompareBB.h"
+#include "Utilities.h"
 #include "ForceMergePAC.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
-
 #include <deque>
+
 
 #define DEBUG_TYPE "mergebb"
 
@@ -36,6 +38,7 @@ STATISTIC(MergeCounter, "Number of merged basic blocks");
 STATISTIC(FunctionCounter, "Amount of created functions");
 
 using namespace llvm;
+using namespace utilities;
 
 static cl::opt<bool>
     ForceMerge("mergebb-force", cl::Hidden, cl::init(false),
@@ -43,39 +46,24 @@ static cl::opt<bool>
 
 static cl::opt<std::string> MergeSpecialFunction(
     "mergebb-function", cl::Hidden,
-    cl::desc(
-        "Merge group of identical BBs,"
-          "if at least one BB from this set has specified parent"));
-
-static cl::opt<std::string> MergeSpecialBB(
-    "mergebb-bb", cl::Hidden,
     cl::desc("Merge group of identical BBs,"
-               "if at least one BB name equals to specified"));
+             "if at least one BB from this set has specified parent"));
+
+static cl::opt<std::string>
+    MergeSpecialBB("mergebb-bb", cl::Hidden,
+                   cl::desc("Merge group of identical BBs,"
+                            "if at least one BB name equals to specified"));
 
 static cl::opt<uint32_t> MinActualBlockSize(
-  "mergebb-threshold", cl::Hidden, cl::init(2),
-  cl::desc("Sizes of basic block, that are equal or less the specified"
+    "mergebb-threshold", cl::Hidden, cl::init(2),
+    cl::desc("Sizes of basic block, that are equal or less the specified"
              "will be skipped from merging"));
 
-static cl::opt<int> AddBlockWeight(
-  "mergebb-addWeight", cl::Hidden, cl::init(0),
-  cl::desc("Additional weight to the created block"));
+static cl::opt<int>
+    AddBlockWeight("mergebb-addWeight", cl::Hidden, cl::init(0),
+                   cl::desc("Additional weight to the created block"));
 
 namespace {
-/// Auxiliary class, that holds basic block and it's hash.
-/// Used BB for comparison
-class BBNode {
-  mutable BasicBlock *BB;
-  BBComparator::BasicBlockHash Hash;
-
-public:
-  // Note the hash is recalculated potentially multiple times, but it is cheap.
-  BBNode(BasicBlock *BB) : BB(BB), Hash(BBComparator::basicBlockHash(*BB)) {}
-
-  BasicBlock *getBB() const { return BB; }
-
-  BBComparator::BasicBlockHash getHash() const { return Hash; }
-};
 
 /// MergeBB finds basic blocks which will generate identical machine code
 /// Once identified, MergeBB will fold them by replacing these basic blocks
@@ -99,73 +87,13 @@ private:
   bool replace(const SmallVectorImpl<BasicBlock *> &BBs,
                IProceduralAbstractionCost *PAC);
 
-  /// Comparator for BBNode
-  class BBNodeCmp {
-    enum
-    {
-      ArraySize = 3
-    };
-    using BaseHashElem = std::tuple<uintptr_t, uintptr_t, int>;
-    mutable struct SmallHashMap {
-      BaseHashElem Elems[ArraySize];
-      SmallHashMap() : Elems({std::make_tuple(0, 0, 0)}) {};
-      size_t idx = 0;
-
-      void push_back(uintptr_t V1, uintptr_t V2, int R) {
-        if (V1 > V2)
-          Elems[idx] = std::make_tuple(V2, V1, -1 * R);
-        else
-          Elems[idx] = std::make_tuple(V1, V2, R);
-        idx = (idx + 1) % ArraySize;
-      }
-
-      Optional<int> getResult(uintptr_t V1, uintptr_t V2) const {
-        int Mult = 1;
-        if (V1 > V2) {
-          std::swap(V1, V2);
-          Mult = -1;
-        }
-
-        for (size_t i = 0; i < ArraySize; ++i) {
-          if (std::get<0>(Elems[i]) == V1 && std::get<1>(Elems[i]) == V2)
-            return std::get<2>(Elems[i]) * Mult;
-        }
-        return Optional<int>();
-      }
-
-    } LastHasher;
-
-    BBComparator BBCmp;
-  public:
-    BBNodeCmp(GlobalNumberState *GN, const DataLayout &DL) : BBCmp(GN, DL) {}
-
-    bool operator()(const BBNode &LHS, const BBNode &RHS) const {
-      // Order first by hashes, then full function comparison.
-
-      if (LHS.getHash() != RHS.getHash())
-        return LHS.getHash() < RHS.getHash();
-      Optional<int> Hashed = LastHasher.getResult(reinterpret_cast<uintptr_t >(LHS.getBB()),
-                                                  reinterpret_cast<uintptr_t >(RHS.getBB()));
-
-      if (Hashed)
-        return *Hashed == -1;
-
-      int Result = BBCmp.compare(LHS.getBB(), RHS.getBB());
-      LastHasher.push_back(reinterpret_cast<uintptr_t >(LHS.getBB()),
-                           reinterpret_cast<uintptr_t >(RHS.getBB()), Result);
-
-      return Result == -1;
-    }
-  };
-
   GlobalNumberState GlobalNumbers;
 };
 
 } // end anonymous namespace
 
 char MergeBB::ID = 0;
-static RegisterPass<MergeBB> X("mergebb", "Merge basic blocks", false,
-                                   false);
+static RegisterPass<MergeBB> X("mergebb", "Merge basic blocks", false, false);
 
 void MergeBB::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfoWrapperPass>();
@@ -192,8 +120,8 @@ bool MergeBB::runOnModule(Module &M) {
   }
 
   using VectorOfBBs = SmallVector<BasicBlock *, 16>;
-  auto BBTree = std::map<BBNode, VectorOfBBs, BBNodeCmp>(
-    BBNodeCmp(&GlobalNumbers, M.getDataLayout()));
+  auto BBTree =
+      std::map<BBNode, VectorOfBBs, BBNodeCmp>(BBNodeCmp(&GlobalNumbers));
 
   // merge hashed values into map
   for (const auto &Node : HashedBBs) {
@@ -234,8 +162,9 @@ bool MergeBB::runOnModule(Module &M) {
 
   const StringRef Arch =
       StringRef(M.getTargetTriple()).take_front(M.getTargetTriple().find('-'));
-  auto DM = ForceMerge ? make_unique<ForceMergePAC>()
-                       : IProceduralAbstractionCost::Create(Arch, AddBlockWeight);
+  auto DM = ForceMerge
+                ? make_unique<ForceMergePAC>()
+                : IProceduralAbstractionCost::Create(Arch, AddBlockWeight);
   assert(DM.get() && "DM was not created properly");
 
   for (auto &IdenticalBlocks : BBTree) {
@@ -245,32 +174,6 @@ bool MergeBB::runOnModule(Module &M) {
   }
 
   return Changed;
-}
-
-/// \return end iterator of the merged part of \p BB
-static inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
-  assert(isa<TerminatorInst>(BB->back()));
-  return std::prev(BB->end());
-}
-
-static inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
-  assert(isa<TerminatorInst>(BB->back()));
-  return std::prev(BB->end());
-}
-
-/// \return begin iterator of the merged part of \p BB
-static inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
-  auto It = BB->begin();
-  while (isa<PHINode>(It))
-    ++It;
-  return It;
-}
-
-static inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
-  auto It = BB->begin();
-  while (isa<PHINode>(It))
-    ++It;
-  return It;
 }
 
 static void debugPrint(const BasicBlock *BB, const StringRef Str = "",
@@ -300,60 +203,6 @@ static bool skipFromMerging(const BasicBlock *BB) {
 /// The way of representing output and skipped instructions of basic blocks
 using BBInstIds = SmallVector<size_t, 8>;
 using BBInstIdsImpl = SmallVectorImpl<size_t>;
-
-/// Class is used to find values in sorted array.
-/// Values, that should be found must be ordered.
-/// Class is useful when we need to traverse all
-/// BB insts [getBeginIt, getEndIt) and find particular instructions
-template <typename T> class SmartSortedSet {
-public:
-  SmartSortedSet() { resetIt(); }
-
-  SmartSortedSet(const SmallVectorImpl<T> &Other) : Values(Other) { resetIt(); }
-  SmartSortedSet(SmallVectorImpl<T> &&Other) : Values(std::move(Other)) {
-    resetIt();
-  }
-
-  SmartSortedSet &operator=(const SmartSortedSet &Other) {
-    Values = Other.Values;
-    resetIt();
-    return *this;
-  }
-  SmartSortedSet &operator=(SmartSortedSet &&Other) {
-    Values = std::move(Other.Values);
-    resetIt();
-    return *this;
-  }
-
-  void checkBegin() const {
-    assert(Cur == Values.begin() &&
-           "Cur should point to the beginning of the array");
-  }
-
-  void resetIt() const { Cur = Values.begin(); }
-  const SmallVectorImpl<T> &get() const { return Values; }
-
-  /// \param InstId number of instruction
-  /// \return true if \p InstId is number of instruction
-  /// should be skipped from factoring out
-  bool contains(T InstId) const;
-
-private:
-  /// Ascendingly sorted vector of instruction numbers
-  SmallVector<T, 8> Values;
-  mutable typename SmallVectorImpl<T>::const_iterator Cur;
-};
-
-using SmartSortedSetInstIds = SmartSortedSet<size_t>;
-
-template <typename T> bool SmartSortedSet<T>::contains(T InstId) const {
-  if (Cur == Values.end()) // no skipped elements
-    return false;
-  if (*Cur != InstId)
-    return false;
-  Cur = (Cur == std::prev(Values.end())) ? Values.begin() : Cur + 1;
-  return true;
-}
 
 /// This function is like isInstUsedOutsideOfBB, but does
 /// consider Phi nodes and TerminatorInsts as a special case, because
@@ -1245,7 +1094,7 @@ static bool beforeReturnBaseBlock(const BasicBlock *BB,
 /// \param BBs array of equal basic blocks
 /// \return true if any BB was changed
 bool MergeBB::replace(const SmallVectorImpl<BasicBlock *> &BBs,
-                          IProceduralAbstractionCost *PAC) {
+                      IProceduralAbstractionCost *PAC) {
   assert(BBs.size() >= 2 && "No sence in merging");
   assert(!skipFromMerging(BBs.front()) && "BB shouldn't be merged");
 

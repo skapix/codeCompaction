@@ -1,0 +1,171 @@
+#ifndef LLVMTRANSFORM_UTILITIES_H
+#define LLVMTRANSFORM_UTILITIES_H
+
+#include "CompareBB.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/Support/Error.h"
+
+namespace llvm {
+
+namespace object {
+class ObjectFile;
+}
+
+namespace utilities {
+
+/// \return end iterator of the merged part of \p BB
+inline BasicBlock::iterator getEndIt(BasicBlock *BB) {
+  assert(isa<TerminatorInst>(BB->back()));
+  return std::prev(BB->end());
+}
+
+inline BasicBlock::const_iterator getEndIt(const BasicBlock *BB) {
+  assert(isa<TerminatorInst>(BB->back()));
+  return std::prev(BB->end());
+}
+
+/// \return begin iterator of the merged part of \p BB
+inline BasicBlock::iterator getBeginIt(BasicBlock *BB) {
+  auto It = BB->begin();
+  while (isa<PHINode>(It))
+    ++It;
+  return It;
+}
+
+inline BasicBlock::const_iterator getBeginIt(const BasicBlock *BB) {
+  auto It = BB->begin();
+  while (isa<PHINode>(It))
+    ++It;
+  return It;
+}
+
+/// Auxiliary class, that holds basic block and it's hash.
+/// Used BB for comparison
+class BBNode {
+  mutable llvm::BasicBlock *BB;
+  BBComparator::BasicBlockHash Hash;
+
+public:
+  // Note the hash is recalculated potentially multiple times, but it is cheap.
+  BBNode(BasicBlock *BB) : BB(BB), Hash(BBComparator::basicBlockHash(*BB)) {}
+
+  BasicBlock *getBB() const { return BB; }
+
+  BBComparator::BasicBlockHash getHash() const { return Hash; }
+};
+
+/// Comparator for BBNode
+class BBNodeCmp {
+  enum { ArraySize = 3 };
+  using BaseHashElem = std::tuple<uintptr_t, uintptr_t, int>;
+  mutable struct SmallHashMap {
+    BaseHashElem Elems[ArraySize];
+    SmallHashMap() : Elems({std::make_tuple(0, 0, 0)}){};
+    size_t idx = 0;
+
+    void push_back(uintptr_t V1, uintptr_t V2, int R) {
+      if (V1 > V2)
+        Elems[idx] = std::make_tuple(V2, V1, -1 * R);
+      else
+        Elems[idx] = std::make_tuple(V1, V2, R);
+      idx = (idx + 1) % ArraySize;
+    }
+
+    Optional<int> getResult(uintptr_t V1, uintptr_t V2) const {
+      int Mult = 1;
+      if (V1 > V2) {
+        std::swap(V1, V2);
+        Mult = -1;
+      }
+
+      for (size_t i = 0; i < ArraySize; ++i) {
+        if (std::get<0>(Elems[i]) == V1 && std::get<1>(Elems[i]) == V2)
+          return std::get<2>(Elems[i]) * Mult;
+      }
+      return Optional<int>();
+    }
+
+  } LastHasher;
+
+  mutable BBComparator BBCmp;
+
+public:
+  BBNodeCmp(GlobalNumberState *GN) : BBCmp(GN) {}
+
+  bool operator()(const BBNode &LHS, const BBNode &RHS) const {
+    // Order first by hashes, then full function comparison.
+
+    if (LHS.getHash() != RHS.getHash())
+      return LHS.getHash() < RHS.getHash();
+    Optional<int> Hashed =
+        LastHasher.getResult(reinterpret_cast<uintptr_t>(LHS.getBB()),
+                             reinterpret_cast<uintptr_t>(RHS.getBB()));
+
+    if (Hashed)
+      return *Hashed == -1;
+
+    int Result = BBCmp.compareBB(LHS.getBB(), RHS.getBB());
+    LastHasher.push_back(reinterpret_cast<uintptr_t>(LHS.getBB()),
+                         reinterpret_cast<uintptr_t>(RHS.getBB()), Result);
+
+    return Result == -1;
+  }
+};
+
+/// Class is used to find values in sorted array.
+/// Values, that should be found must be ordered.
+/// Class is useful when we need to traverse all
+/// BB insts [getBeginIt, getEndIt) and find particular instructions
+template <typename T> class SmartSortedSet {
+public:
+  SmartSortedSet() { resetIt(); }
+
+  SmartSortedSet(const SmallVectorImpl<T> &Other) : Values(Other) { resetIt(); }
+  SmartSortedSet(SmallVectorImpl<T> &&Other) : Values(std::move(Other)) {
+    resetIt();
+  }
+
+  SmartSortedSet &operator=(const SmartSortedSet &Other) {
+    Values = Other.Values;
+    resetIt();
+    return *this;
+  }
+  SmartSortedSet &operator=(SmartSortedSet &&Other) {
+    Values = std::move(Other.Values);
+    resetIt();
+    return *this;
+  }
+
+  void checkBegin() const {
+    assert(Cur == Values.begin() &&
+           "Cur should point to the beginning of the array");
+  }
+
+  void resetIt() const { Cur = Values.begin(); }
+  const SmallVectorImpl<T> &get() const { return Values; }
+
+  /// \param InstId number of instruction
+  /// \return true if \p InstId is number of instruction
+  /// should be skipped from factoring out
+  bool contains(T InstId) const;
+
+private:
+  /// Ascendingly sorted vector of instruction numbers
+  SmallVector<T, 8> Values;
+  mutable typename SmallVectorImpl<T>::const_iterator Cur;
+};
+
+template <typename T> bool SmartSortedSet<T>::contains(T InstId) const {
+  if (Cur == Values.end()) // no skipped elements
+    return false;
+  if (*Cur != InstId)
+    return false;
+  Cur = (Cur == std::prev(Values.end())) ? Values.begin() : Cur + 1;
+  return true;
+}
+
+
+} // namespace utilities
+} // namespace llvm
+
+#endif // LLVMTRANSFORM_UTILITIES_H
