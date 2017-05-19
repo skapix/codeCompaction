@@ -25,12 +25,12 @@
 #include "CompareBB.h"
 #include "FunctionCompiler.h"
 #include "Utilities.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/ADT/DenseSet.h"
 
 // TODO: add partial replacing (several replaced, others not)
 // TODO: create cache for sized functions
@@ -1125,7 +1125,6 @@ static bool shouldReplaceCommonChoice(bool FuncCreated, Function *F,
 static bool shouldReplacePreciseChoice(bool FuncCreated, Function *Common,
                                        const SmallVector<BBInfo, 8> &BBInfos,
                                        FunctionCompiler &Cost) {
-  // TODO: don't create extra functions; Reuse the old ones
   // get current size of functions
   SmallVector<StringRef, 16> Funcs;
   for (auto It = BBInfos.begin(), EIt = BBInfos.end(); It != EIt;) {

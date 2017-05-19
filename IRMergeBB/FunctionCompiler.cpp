@@ -189,40 +189,10 @@ FunctionCompiler::cloneFunctionToInnerModule(Function &F,
   }
 
   getFunctionReplaces(F, *NewFunction, VtoV);
-  // filling VtoV
-  // 1) fill missed functions, searching CallInst and InvokeInst's
-  // 2) search in arguments global values and insert them
-  for (auto &BB : F) {
-    for (auto &I : BB) {
-      // no need to handle functions in a special way because
-      // function itself is one of the arguments of instructions
-      CallSite CS(&I);
-      if (CS) {
-        Function *Called = CS.getCalledFunction();
-        // virtual functions can't be determined in link time
-        if (Called)
-          Mapper->mapConstant(*Called);
-      }
-
-      for (auto &Op : I.operands()) {
-        if (auto C = dyn_cast<Constant>(Op.get())) {
-          auto NewC = Mapper->mapConstant(*C);
-          // add initializer if it exists
-          if (auto GV = dyn_cast<GlobalVariable>(C)) {
-            if (GV->hasInitializer()) {
-              auto NewGV = cast<GlobalVariable>(NewC);
-              NewGV->setInitializer(Mapper->mapConstant(*GV->getInitializer()));
-            }
-          }
-        }
-
-        // InsertConstantOperands(VtoV, C, M.get());
-      } // for (auto &Op : I.operands()) {
-    }   // for (auto &I : BB)
-  }     // for (auto &BB : F)
 
   SmallVector<ReturnInst *, 8> Returns;
-  CloneFunctionInto(NewFunction, &F, VtoV, true, Returns);
+  CloneFunctionInto(NewFunction, &F, VtoV, true, Returns, "", nullptr, nullptr,
+                    Materializer.get());
 
   if (BBInterest)
     *BBInterest = cast<BasicBlock>(VtoV[*BBInterest]);

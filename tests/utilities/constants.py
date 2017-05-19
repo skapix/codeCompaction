@@ -14,6 +14,7 @@ g_optWithLoad = g_opt + " -load " + g_loadOptimization + " " + g_optimization
 g_testPath = os.path.dirname(os.path.abspath(__file__)) + "/testCases"
 
 g_armRoot = "/usr/arm-linux-gnueabihf/"
+g_extraCppInclude = g_armRoot + "include/c++/6.3.1/arm-linux-gnueabihf"
 
 class CompileInfo:
     def __init__(self, program, defaultArgs, outputExt):
@@ -40,7 +41,7 @@ g_clangArmArch = "-target arm-linux-gnueabihf --sysroot="
 
 g_arches = {"x64": {"clang++": ArchInfo(g_clangX64Arch), "clang": ArchInfo(g_clangX64Arch),
                     "llc": ArchInfo("-march=x86-64"), "size": ArchInfo("size")},
-            "arm": {"clang++": ArchInfo(g_clangArmArch + g_armRoot),
+            "arm": {"clang++": ArchInfo(g_clangArmArch + g_armRoot + " -I" + g_extraCppInclude),
                     "clang": ArchInfo(g_clangArmArch + g_armRoot),
                     "llc": ArchInfo("-march=arm"), "size": ArchInfo("arm-linux-gnueabihf-size") }}
 

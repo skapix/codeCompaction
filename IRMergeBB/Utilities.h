@@ -2,8 +2,8 @@
 #define LLVMTRANSFORM_UTILITIES_H
 
 #include "CompareBB.h"
-#include "llvm/Support/Error.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/Error.h"
 
 namespace llvm {
 
