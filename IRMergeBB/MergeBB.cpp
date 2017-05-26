@@ -206,12 +206,6 @@ static bool skipFromMerging(const BasicBlock *BB) {
       return true;
   }
 
-  //  if (std::any_of(BB->begin(), BB->end(), [](const
-  //  BasicBlock::const_iterator &I) {
-  //    return false;
-  //  }))
-  //    return true;
-
   return false;
 }
 
@@ -478,7 +472,6 @@ setTypeCommonCase(const Instruction *I,
 void BBsCommonInfo::setSpecialInsts(const TargetTransformInfo &TTI,
                                     BasicBlock *BB) {
   const SmartSortedSet<Instruction *> OutputsSet(convertInstIds(BB, OutputIds));
-
   SmallPtrSet<const Value *, 8> BBSpecialBefore;
   SmallPtrSet<const Value *, 8> BBSpecialAfter;
   //  SmallPtrSet<const Value *, 8> BBSkippedInstsOut;
@@ -551,15 +544,15 @@ void BBsCommonInfo::setSpecialInsts(const TargetTransformInfo &TTI,
 
 /// Select a function return value from array of operands
 void BBsCommonInfo::setFunctionRetValId(const ArrayRef<Instruction *> Outputs) {
-  for (auto It = Outputs.rbegin(), EIt = Outputs.rend(); It != EIt; ++It) {
-    Instruction *I = *It;
-    assert(!llvm::isa<AllocaInst>(I) && "Alloca Can't be return value");
-    if (I->getType()->isFirstClassType()) {
-      ReturnValueOutputId = Outputs.rend() - It - 1;
-      return;
-    }
+  ReturnValueOutputId = Outputs.empty() ? 0 : Outputs.size() - 1;
+
+  DEBUG(
+  for (auto It = Outputs.begin(), EIt = Outputs.end(); It != EIt; ++It) {
+    assert(!isa<AllocaInst>(*It) && "Alloca Can't be return value");
+    assert((*It)->getType()->isFirstClassType() &&
+             "Output instruction can be only the first class");
   }
-  ReturnValueOutputId = Outputs.size();
+  );
 }
 
 ////////// Common Basic Block Info End //////////
