@@ -54,7 +54,7 @@ public:
                     const llvm::BasicBlock::const_iterator &Begin,
                     const llvm::BasicBlock::const_iterator &End) = 0;
 
-  void setTail(const bool IsReallyTail);
+  virtual void setTail(const bool IsReallyTail);
 
   /// \return whether is function is too small and not worth
   /// considering to merge

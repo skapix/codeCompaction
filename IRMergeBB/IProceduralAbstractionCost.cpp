@@ -28,8 +28,7 @@ IProceduralAbstractionCost::Create(const StringRef Arch,
 
   dbgs() << "Warning! Unknown architecture: " << Arch << "\n";
   dbgs() << "  For greater pass impact of code compaction, please, write a "
-            "function"
-            "for this arch, which calculates an Instruction weight.";
+            "function for this arch, which calculates an Instruction weight.";
 
   return std::make_unique<CommonPAC>(AddBlockWeight);
 }

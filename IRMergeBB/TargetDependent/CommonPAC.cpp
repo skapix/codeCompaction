@@ -24,7 +24,6 @@ void CommonPAC::init(const llvm::TargetTransformInfo &TTI,
                      const InstructionLocation &IL,
                      const llvm::BasicBlock::const_iterator &Begin,
                      const llvm::BasicBlock::const_iterator &End) {
-  assert(std::distance(Begin, End) >= 1 && "Should not reach here");
   this->TTI = &TTI;
   OriginalBlockWeight = 0;
   NewBlockAddWeight = 0;

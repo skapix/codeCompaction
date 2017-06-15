@@ -25,6 +25,7 @@
 #include "CompareBB.h"
 #include "Utilities.h"
 #include "ForceMergePAC.h"
+#include "TTIPAC.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -43,6 +44,10 @@ using namespace utilities;
 static cl::opt<bool>
     ForceMerge("mergebb-force", cl::Hidden, cl::init(false),
                cl::desc("Force folding basic blocks, when it is unprofitable"));
+
+static cl::opt<bool>
+  ForceTTI("mergebb-tti", cl::Hidden, cl::init(false),
+             cl::desc("Force using TargetTransformInfo interface"));
 
 static cl::opt<std::string> MergeSpecialFunction(
     "mergebb-function", cl::Hidden,
@@ -164,7 +169,8 @@ bool MergeBB::runOnModule(Module &M) {
       StringRef(M.getTargetTriple()).take_front(M.getTargetTriple().find('-'));
   auto DM = ForceMerge
                 ? make_unique<ForceMergePAC>()
-                : IProceduralAbstractionCost::Create(Arch, AddBlockWeight);
+                : ForceTTI ? make_unique<TTIPAC>(AddBlockWeight)
+                  : IProceduralAbstractionCost::Create(Arch, AddBlockWeight);
   assert(DM.get() && "DM was not created properly");
 
   for (auto &IdenticalBlocks : BBTree) {
